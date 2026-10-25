@@ -85,22 +85,22 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o dist/qoder2api-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} .
+          go build -trimpath -ldflags="-s -w" -o dist/worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} .
 
       - name: Create archive
         run: |
           cd dist
           if [ "${{ matrix.os }}" = "windows" ]; then
-            zip -r qoder2api-${{ matrix.os }}-${{ matrix.arch }}.zip qoder2api-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+            zip -r worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}.zip worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
           else
-            tar -czf qoder2api-${{ matrix.os }}-${{ matrix.arch }}.tar.gz qoder2api-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+            tar -czf worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}.tar.gz worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qoder2api-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/qoder2api-${{ matrix.os }}-${{ matrix.arch }}.*
+          name: worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/worker-cn-2api-${{ matrix.os }}-${{ matrix.arch }}.*
 
   # --- Build and push Docker image ---
   build-docker:
@@ -122,6 +122,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
+            ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/worker-cn-2api', secrets.DOCKERHUB_USERNAME) || '' }}
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -134,6 +135,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
