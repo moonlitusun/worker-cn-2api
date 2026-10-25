@@ -13,6 +13,7 @@ import (
 	"qoder2api/auth"
 	"qoder2api/bridge"
 	"qoder2api/models"
+	"qoder2api/requestopts"
 	"qoder2api/stats"
 	"qoder2api/store"
 	"qoder2api/transform"
@@ -64,6 +65,11 @@ func makeUnifiedChatHandler(st *store.Store, qoderProvider *bridgeProvider, wbBr
 		var reqBody map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 			writeJSONError(w, 400, "invalid_request_error", "Invalid JSON body: "+err.Error())
+			return
+		}
+
+		if _, err := requestopts.ReasoningEnabled(reqBody); err != nil {
+			writeJSONError(w, 400, "invalid_request_error", err.Error())
 			return
 		}
 

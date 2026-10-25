@@ -3,6 +3,7 @@ package workbuddy
 import (
 	"bytes"
 	"encoding/json"
+	"qoder2api/requestopts"
 	"strings"
 
 	"github.com/google/uuid"
@@ -36,7 +37,11 @@ func BuildUpstreamRequest(reqBody map[string]interface{}, upstreamModel string, 
 	if maxTokens, ok := reqBody["max_tokens"]; ok {
 		options["max_tokens"] = maxTokens
 	}
-	options["enable_reasoning"] = true
+	reasoning, err := requestopts.ReasoningEnabled(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	options["enable_reasoning"] = reasoning
 
 	return &UpstreamChatRequest{
 		Model:    upstreamModel,

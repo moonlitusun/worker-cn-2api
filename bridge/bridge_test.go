@@ -242,6 +242,7 @@ func TestCurrentIdentitySnapshot(t *testing.T) {
 // here the chat path is driven through OpenAiBridge.HandleChat with a
 // region pointing at this test server).
 type fakeGateway struct {
+	requests  chan map[string]interface{}
 	chatLines []string // raw SSE lines ("data: {...}")
 }
 
@@ -257,6 +258,24 @@ func newFakeBridge(t *testing.T, gw *fakeGateway) *OpenAiBridge {
 		io.WriteString(w, `{"chat":[{"key":"qmodel_latest","display_name":"Fake-Model","enable":true,"is_vl":false}]}`)
 	})
 	mux.HandleFunc("/algo/api/v2/service/pro/sse/agent_chat_generation", func(w http.ResponseWriter, r *http.Request) {
+		if gw.requests != nil {
+			var body map[string]interface{}
+			encoded, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			decoded, err := auth.Decode(string(encoded))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := json.Unmarshal(decoded, &body); err != nil {
+				t.Error(err)
+				return
+			}
+			gw.requests <- body
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 		for _, l := range gw.chatLines {
@@ -886,5 +905,38 @@ func TestChatQueueTimeoutFastFails(t *testing.T) {
 	var qErr *QueueTimeoutError
 	if !errors.As(err, &qErr) {
 		t.Fatalf("expected QueueTimeoutError, got %v", err)
+	}
+}
+
+func TestClientCanDisableQoderReasoning(t *testing.T) {
+	gw := &fakeGateway{chatLines: []string{"data: [DONE]"}, requests: make(chan map[string]interface{}, 1)}
+	b := newFakeBridge(t, gw)
+	req := chatRequest("Fake-Model")
+	req["thinking"] = map[string]interface{}{"type": "disabled"}
+	req["temperature"] = 0.2
+	req["max_tokens"] = float64(256)
+	w := httptest.NewRecorder()
+	if err := b.HandleChat(context.Background(), w, req, nil); err != nil {
+		t.Fatal(err)
+	}
+	body := <-gw.requests
+	config := body["model_config"].(map[string]interface{})
+	extra := body["chat_context"].(map[string]interface{})["extra"].(map[string]interface{})["modelConfig"].(map[string]interface{})
+	if config["is_reasoning"] != false || extra["is_reasoning"] != false {
+		t.Fatalf("reasoning was forced on: %v %v", config, extra)
+	}
+	if got := w.Header().Get("X-Worker-Unsupported-Parameters"); got != "max_tokens, temperature" {
+		t.Fatalf("unsupported controls must be explicit: %q", got)
+	}
+}
+
+func TestInvalidReasoningReturns400BeforeUpstream(t *testing.T) {
+	handler := MakeChatHandler(func(string) *OpenAiBridge { return &OpenAiBridge{} }, nil)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"reasoning_effort":"banana"}`))
+	req.Header.Set("Authorization", "Bearer test")
+	w := httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != 400 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }

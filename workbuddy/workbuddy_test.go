@@ -160,3 +160,19 @@ func TestBridgeHandleStreamEndToEnd(t *testing.T) {
 		t.Errorf("stream must terminate with [DONE]")
 	}
 }
+
+func TestBuildUpstreamRequestHonorsDisabledThinking(t *testing.T) {
+	req, err := BuildUpstreamRequest(map[string]interface{}{
+		"thinking":    map[string]interface{}{"type": "disabled"},
+		"temperature": 0.2, "max_tokens": float64(256),
+	}, "deepseek-r1", "test-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Options["enable_reasoning"] != false {
+		t.Fatalf("reasoning was forced on: %v", req.Options)
+	}
+	if req.Options["temperature"] != 0.2 || req.Options["max_tokens"] != float64(256) {
+		t.Fatal("existing controls lost")
+	}
+}

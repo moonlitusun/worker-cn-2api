@@ -20,6 +20,7 @@ import (
 
 	"qoder2api/auth"
 	"qoder2api/models"
+	"qoder2api/requestopts"
 	"qoder2api/stats"
 	"qoder2api/transform"
 
@@ -551,6 +552,13 @@ type UsageSink func(u *transform.Usage)
 // For non-streaming, it returns the response as a map.
 // usageSink (may be nil) receives upstream token accounting when available.
 func (b *OpenAiBridge) HandleChat(ctx context.Context, w http.ResponseWriter, reqBody map[string]interface{}, usageSink UsageSink) error {
+	reasoning, err := requestopts.ReasoningEnabled(reqBody)
+	if err != nil {
+		return err
+	}
+	if unsupported := requestopts.UnsupportedQoderParameters(reqBody); unsupported != "" {
+		w.Header().Set("X-Worker-Unsupported-Parameters", unsupported)
+	}
 	if err := b.EnsureFreshSession(ctx); err != nil {
 		return err
 	}
@@ -577,9 +585,9 @@ func (b *OpenAiBridge) HandleChat(ctx context.Context, w http.ResponseWriter, re
 	body.Stream = true
 	body.AliyunUserType = identity.UserType
 	body.ModelConfig.Key = qoderModel
-	body.ModelConfig.IsReasoning = true
+	body.ModelConfig.IsReasoning = reasoning
 	body.ChatContext.Extra.ModelConfig.Key = qoderModel
-	body.ChatContext.Extra.ModelConfig.IsReasoning = true
+	body.ChatContext.Extra.ModelConfig.IsReasoning = reasoning
 	body.Business.ID = uuid.New().String()
 	body.Business.BeginAt = time.Now().UnixMilli()
 
@@ -1012,6 +1020,11 @@ func MakeChatHandler(resolver BridgeResolver, rec *stats.Recorder) http.HandlerF
 		var reqBody map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 			writeError(w, 400, "invalid_request_error", "Invalid JSON body: "+err.Error())
+			return
+		}
+
+		if _, err := requestopts.ReasoningEnabled(reqBody); err != nil {
+			writeError(w, 400, "invalid_request_error", err.Error())
 			return
 		}
 

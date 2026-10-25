@@ -90,3 +90,23 @@ func TestUnifiedModelsHandler(t *testing.T) {
 		t.Error("models list must contain WorkBuddy model hunyuan-code")
 	}
 }
+
+func TestUnifiedChatRejectsConflictingReasoningBeforeRouting(t *testing.T) {
+	s, err := store.New(t.TempDir() + "/data.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddKey("test-key", "parameters"); err != nil {
+		t.Fatal(err)
+	}
+	handler := makeUnifiedChatHandler(s, nil, nil, nil)
+	for _, model := range []string{"DeepSeek-Flash", "workbuddy/deepseek-r1"} {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"`+model+`","thinking":{"type":"disabled"},"reasoning_effort":"high"}`))
+		req.Header.Set("Authorization", "Bearer test-key")
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "conflicting reasoning controls") {
+			t.Fatalf("model=%s status=%d body=%s", model, w.Code, w.Body.String())
+		}
+	}
+}

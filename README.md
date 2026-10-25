@@ -238,3 +238,18 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o qoder2api-linux-arm64 .
 6. 如果本项目的任何内容侵犯了您的权益，请及时联系项目维护者，我们将积极配合处理。
 
 使用本项目即表示您已阅读并同意以上免责声明。如果您不同意，请立即停止使用并删除本项目。
+
+## 推理开关与参数兼容性
+
+Qoder 与 WorkBuddy 通道共同识别以下客户端思考开关：
+
+- `thinking: {"type": "enabled" | "disabled"}`（Cora 的 DeepSeek 格式）。
+- `reasoning_effort: "none" | "off"` 关闭；`minimal/low/medium/high/xhigh/max` 开启。
+- `enable_thinking: true | false`，或 `chat_template_kwargs.enable_thinking`。
+
+多种写法同时出现时必须一致，否则在访问上游之前返回 HTTP 400；无效类型和枚举同样返回 400。不传开关时保留原有开启行为。
+
+两个上游目前仅映射布尔开关，不保证保留推理强度档位。Qoder 的 `temperature`、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`frequency_penalty`、`presence_penalty`、`seed` 没有已验证的字段映射，会列入 `X-Worker-Unsupported-Parameters` 响应头；开启思考的 `reasoning_effort` 也列出，表示仅应用开关、未应用强度。WorkBuddy 保留原有的 `temperature` 和 `max_tokens` options 映射。
+
+这层映射保证代理向上游发送的开关值，实际模型是否支持关闭仍需针对账号和模型验证。代理不会通过删除模型返回的思考内容来假装关闭思考。
+
