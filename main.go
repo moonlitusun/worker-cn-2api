@@ -17,6 +17,7 @@ import (
 	"qoder2api/models"
 	"qoder2api/stats"
 	"qoder2api/store"
+	"qoder2api/workbuddy"
 
 	"sync"
 	"time"
@@ -65,7 +66,7 @@ func (p *bridgeProvider) currentBridge() *bridge.OpenAiBridge {
 // deliberately cheap (no upstream calls, no session bootstrap): the body
 // carries readiness details (PAT configured, effective stream timeouts)
 // while the status stays 200 as long as the process is serving.
-func healthHandler(st *store.Store) http.HandlerFunc {
+func healthHandler(st *store.Store, wbBridge *workbuddy.Bridge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -74,9 +75,14 @@ func healthHandler(st *store.Store) http.HandlerFunc {
 		}
 		timeouts := auth.CurrentStreamTimeouts()
 		w.Header().Set("Content-Type", "application/json")
+		hasWB := false
+		if wbBridge != nil && wbBridge.Config().Token != "" {
+			hasWB = true
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":               "ok",
 			"has_pat":              st.GetPAT() != "",
+			"has_workbuddy":        hasWB,
 			"chat_timeout_seconds": int(timeouts.Header.Seconds()),
 			"idle_timeout_seconds": int(timeouts.Idle.Seconds()),
 		})
@@ -173,13 +179,22 @@ func main() {
 		return catalog.Keys()
 	}
 
+	// Initialize WorkBuddy bridge
+	wbConfig := workbuddy.ResolveConfig("")
+	wbBridge := workbuddy.NewBridge(wbConfig)
+	if wbConfig.Token != "" {
+		log.Printf("[workbuddy] backend ready (user=%s device=%s)", wbConfig.UserID, wbConfig.DeviceID)
+	} else {
+		log.Printf("[workbuddy] backend standby (no auth token configured)")
+	}
+
 	// Initialize admin
 	adminInst := admin.New(st, modelFetcher, rec)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/chat/completions", bridge.MakeChatHandler(provider.resolveBridge, rec))
-	mux.HandleFunc("/v1/models", bridge.MakeModelsHandler(provider.resolveBridge))
-	mux.HandleFunc("/health", healthHandler(st))
+	mux.HandleFunc("/v1/chat/completions", makeUnifiedChatHandler(st, provider, wbBridge, rec))
+	mux.HandleFunc("/v1/models", makeUnifiedModelsHandler(st, provider, wbBridge))
+	mux.HandleFunc("/health", healthHandler(st, wbBridge))
 
 	// Root redirect to admin UI
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
