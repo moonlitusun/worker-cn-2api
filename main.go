@@ -83,9 +83,16 @@ func healthHandler(st *store.Store) http.HandlerFunc {
 	}
 }
 
+func getEnv(workerKey, legacyKey string) string {
+	if v := os.Getenv(workerKey); v != "" {
+		return v
+	}
+	return os.Getenv(legacyKey)
+}
+
 func main() {
 	// Initialize store
-	dataPath := os.Getenv("QODER_DATA_PATH")
+	dataPath := getEnv("WORKER_DATA_PATH", "QODER_DATA_PATH")
 	if dataPath == "" {
 		dataPath = "data.json"
 	}
@@ -95,16 +102,16 @@ func main() {
 	}
 
 	// Host/port: env vars override config file; config file overrides defaults
-	host := os.Getenv("QODER_HOST")
+	host := getEnv("WORKER_HOST", "QODER_HOST")
 	if host == "" {
 		host = st.GetHost()
 	}
 	port := st.GetPort()
-	if envPort := os.Getenv("QODER_PORT"); envPort != "" {
+	if envPort := getEnv("WORKER_PORT", "QODER_PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil {
 			port = p
 		} else {
-			log.Printf("[bridge] WARN invalid QODER_PORT=%q; using %d", envPort, port)
+			log.Printf("[bridge] WARN invalid port=%q; using %d", envPort, port)
 		}
 	}
 
@@ -112,19 +119,19 @@ func main() {
 	// config file overrides the built-in defaults (same precedence as
 	// host/port). Applied to new requests immediately.
 	chatTimeout := st.GetChatTimeoutSeconds()
-	if v := os.Getenv("QODER_CHAT_TIMEOUT_SECONDS"); v != "" {
+	if v := getEnv("WORKER_CHAT_TIMEOUT_SECONDS", "QODER_CHAT_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= store.MaxChatTimeoutSeconds {
 			chatTimeout = n
 		} else {
-			log.Printf("[bridge] WARN invalid QODER_CHAT_TIMEOUT_SECONDS=%q; using %d", v, chatTimeout)
+			log.Printf("[bridge] WARN invalid CHAT_TIMEOUT_SECONDS=%q; using %d", v, chatTimeout)
 		}
 	}
 	idleTimeout := st.GetIdleTimeoutSeconds()
-	if v := os.Getenv("QODER_IDLE_TIMEOUT_SECONDS"); v != "" {
+	if v := getEnv("WORKER_IDLE_TIMEOUT_SECONDS", "QODER_IDLE_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= store.MaxIdleTimeoutSeconds {
 			idleTimeout = n
 		} else {
-			log.Printf("[bridge] WARN invalid QODER_IDLE_TIMEOUT_SECONDS=%q; using %d", v, idleTimeout)
+			log.Printf("[bridge] WARN invalid IDLE_TIMEOUT_SECONDS=%q; using %d", v, idleTimeout)
 		}
 	}
 	auth.SetStreamTimeouts(time.Duration(chatTimeout)*time.Second, time.Duration(idleTimeout)*time.Second)

@@ -808,3 +808,83 @@ func TestChatSlotsSerializeUpstreamCalls(t *testing.T) {
 		t.Errorf("max concurrent upstream calls = %d, want 1 (default slot limit)", got)
 	}
 }
+
+// TestHandleStreamImmediateConnectedPacket verifies that stream requests emit
+// an immediate connected comment packet to unblock reverse proxy 504 timeouts.
+func TestHandleStreamImmediateConnectedPacket(t *testing.T) {
+	gw := &fakeGateway{chatLines: []string{
+		sseFrame(t, map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"content": "ok"}}}}),
+		"data: [DONE]",
+	}}
+	b := newFakeBridge(t, gw)
+
+	w := httptest.NewRecorder()
+	err := b.HandleChat(context.Background(), w, map[string]interface{}{
+		"model": "Fake-Model",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hi"},
+		},
+		"stream": true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("HandleChat: %v", err)
+	}
+
+	body := w.Body.String()
+	if !strings.HasPrefix(body, ": worker-cn-2api connected\n\n") {
+		t.Errorf("expected stream to start with immediate connected packet, got:\n%s", body)
+	}
+}
+
+// TestSafeStreamWriterHeartbeatPing verifies that idle connections receive
+// SSE comment pings to keep reverse proxies alive.
+func TestSafeStreamWriterHeartbeatPing(t *testing.T) {
+	w := httptest.NewRecorder()
+	sw := newSafeStreamWriter(w)
+
+	// Simulate idle time
+	sw.lastWriteNs.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	fired := sw.WritePingIfIdle(2 * time.Second)
+	if !fired {
+		t.Error("expected ping to fire when idle")
+	}
+	if !strings.Contains(w.Body.String(), ": ping\n\n") {
+		t.Errorf("expected body to contain : ping\\n\\n, got %q", w.Body.String())
+	}
+
+	// Immediate next check should not fire because it was just written
+	firedAgain := sw.WritePingIfIdle(2 * time.Second)
+	if firedAgain {
+		t.Error("ping should not fire immediately after write")
+	}
+}
+
+// TestChatQueueTimeoutFastFails verifies that queued requests fast-fail
+// when exceeding maxQueueTimeout instead of blocking until reverse proxy 504.
+func TestChatQueueTimeoutFastFails(t *testing.T) {
+	t.Setenv("WORKER_QUEUE_TIMEOUT_SECONDS", "1")
+	gw := &fakeGateway{chatLines: []string{"data: [DONE]"}}
+	b := newFakeBridge(t, gw)
+
+	// Saturate slot
+	b.chatSlots <- struct{}{}
+	defer func() { <-b.chatSlots }()
+
+	w := httptest.NewRecorder()
+	reqBody := map[string]interface{}{
+		"model": "Fake-Model",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hi"},
+		},
+		"stream": false,
+	}
+
+	err := b.HandleChat(context.Background(), w, reqBody, nil)
+	if err == nil {
+		t.Fatal("expected queue timeout error, got nil")
+	}
+	var qErr *QueueTimeoutError
+	if !errors.As(err, &qErr) {
+		t.Fatalf("expected QueueTimeoutError, got %v", err)
+	}
+}

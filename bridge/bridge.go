@@ -216,8 +216,14 @@ func NewOpenAiBridge(pat string, region *auth.RegionConfig) *OpenAiBridge {
 // chat requests. The Qoder gateway enforces a strict per-account admission
 // window per model and rejects excess requests with business code 10605
 // (delivered over HTTP 401/403), so requests are queued locally by default
-// instead of tripping the gateway limiter. Override via QODER_MAX_CONCURRENCY.
+// instead of tripping the gateway limiter. Override via WORKER_MAX_CONCURRENCY
+// or QODER_MAX_CONCURRENCY.
 func maxUpstreamConcurrency() int {
+	if v := os.Getenv("WORKER_MAX_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 32 {
+			return n
+		}
+	}
 	if v := os.Getenv("QODER_MAX_CONCURRENCY"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 32 {
 			return n
@@ -225,6 +231,32 @@ func maxUpstreamConcurrency() int {
 		log.Printf("[bridge] WARN invalid QODER_MAX_CONCURRENCY=%q; using 1", v)
 	}
 	return 1
+}
+
+// maxQueueTimeout returns the maximum time a request can wait in the admission
+// queue before fast-failing, avoiding 504 Gateway Timeouts from upstream reverse proxies.
+func maxQueueTimeout() time.Duration {
+	if v := os.Getenv("WORKER_QUEUE_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 300 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	if v := os.Getenv("QODER_QUEUE_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 300 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 15 * time.Second
+}
+
+// QueueTimeoutError indicates a request waited in the local queue longer than
+// the configured admission deadline.
+type QueueTimeoutError struct {
+	Timeout time.Duration
+}
+
+func (e *QueueTimeoutError) Error() string {
+	return fmt.Sprintf("upstream queue timed out after %s", e.Timeout)
 }
 
 // bootstrapSession performs a cold PAT → jobToken exchange.
@@ -604,15 +636,60 @@ func (b *OpenAiBridge) HandleChat(ctx context.Context, w http.ResponseWriter, re
 	reqID := "chatcmpl-" + uuid.New().String()[:24]
 	created := time.Now().Unix()
 
+	var sw *safeStreamWriter
+	stopHeartbeat := make(chan struct{})
+	defer close(stopHeartbeat)
+
+	if stream {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-transform")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		sw = newSafeStreamWriter(w)
+		sw.WriteData([]byte(": worker-cn-2api connected\n\n"))
+
+		// Start heartbeat watchdog to eliminate proxy 504 timeouts while waiting
+		// in queue or waiting for long upstream model thinking/reasoning.
+		go func() {
+			ticker := time.NewTicker(3 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopHeartbeat:
+					return
+				case <-ticker.C:
+					sw.WritePingIfIdle(3 * time.Second)
+				}
+			}
+		}()
+	}
+
 	// Admission gate: hold one slot for the whole upstream exchange so
 	// parallel client requests queue here instead of being rejected by the
 	// gateway's concurrency limiter (code 10605).
+	queueTimeout := maxQueueTimeout()
+	queueTimer := time.NewTimer(queueTimeout)
+	defer queueTimer.Stop()
+
 	select {
 	case b.chatSlots <- struct{}{}:
 	default:
-		log.Printf("[bridge] all %d upstream slot(s) busy; queuing request", cap(b.chatSlots))
+		log.Printf("[bridge] all %d upstream slot(s) busy; queuing request (timeout=%s)", cap(b.chatSlots), queueTimeout)
 		select {
 		case b.chatSlots <- struct{}{}:
+		case <-queueTimer.C:
+			log.Printf("[bridge] request queue timeout (%s); fast-failing to avoid gateway 504", queueTimeout)
+			if stream && sw != nil {
+				errChunk := transform.MakeChunk(reqID, created, openaiModel)
+				writeFinishReason(errChunk, "error")
+				clearDelta(errChunk)
+				setError(errChunk, "Upstream capacity reached; queued request timed out. Please retry.")
+				errBytes, _ := marshalNoEscape(errChunk)
+				sw.WriteData([]byte("data: " + string(errBytes) + "\n\n"))
+				sw.WriteData([]byte("data: [DONE]\n\n"))
+				return &StreamReportedError{Err: errors.New("upstream queue timeout")}
+			}
+			return &QueueTimeoutError{Timeout: queueTimeout}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -625,9 +702,82 @@ func (b *OpenAiBridge) HandleChat(ctx context.Context, w http.ResponseWriter, re
 	}
 
 	if stream {
-		return b.handleStream(ctx, w, jsonBody, url, extraHeaders, reqID, created, openaiModel, toolsEnabled, usageSink)
+		var outW http.ResponseWriter = w
+		if sw != nil {
+			outW = sw
+		}
+		return b.handleStream(ctx, outW, jsonBody, url, extraHeaders, reqID, created, openaiModel, toolsEnabled, usageSink)
 	}
 	return b.handleSync(ctx, w, jsonBody, url, extraHeaders, reqID, created, openaiModel, toolsEnabled, usageSink)
+}
+
+// safeStreamWriter guards concurrent writes to http.ResponseWriter and http.Flusher,
+// tracking the last write timestamp to support SSE keep-alive heartbeats.
+type safeStreamWriter struct {
+	w           http.ResponseWriter
+	flusher     http.Flusher
+	mu          sync.Mutex
+	lastWriteNs atomic.Int64
+}
+
+func newSafeStreamWriter(w http.ResponseWriter) *safeStreamWriter {
+	flusher, _ := w.(http.Flusher)
+	sw := &safeStreamWriter{
+		w:       w,
+		flusher: flusher,
+	}
+	sw.lastWriteNs.Store(time.Now().UnixNano())
+	return sw
+}
+
+func (s *safeStreamWriter) Header() http.Header {
+	return s.w.Header()
+}
+
+func (s *safeStreamWriter) WriteHeader(statusCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w.WriteHeader(statusCode)
+}
+
+func (s *safeStreamWriter) Write(b []byte) (int, error) {
+	return s.WriteData(b)
+}
+
+func (s *safeStreamWriter) Flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+func (s *safeStreamWriter) WriteData(b []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastWriteNs.Store(time.Now().UnixNano())
+	n, err := s.w.Write(b)
+	if err == nil && s.flusher != nil {
+		s.flusher.Flush()
+	}
+	return n, err
+}
+
+func (s *safeStreamWriter) WritePingIfIdle(idleDuration time.Duration) bool {
+	if time.Since(time.Unix(0, s.lastWriteNs.Load())) < idleDuration {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Since(time.Unix(0, s.lastWriteNs.Load())) < idleDuration {
+		return false
+	}
+	s.lastWriteNs.Store(time.Now().UnixNano())
+	s.w.Write([]byte(": ping\n\n"))
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+	return true
 }
 
 // StreamReportedError wraps an upstream stream error that has already been
@@ -641,17 +791,20 @@ func (e *StreamReportedError) Error() string { return e.Err.Error() }
 func (e *StreamReportedError) Unwrap() error { return e.Err }
 
 func (b *OpenAiBridge) handleStream(ctx context.Context, w http.ResponseWriter, jsonBody []byte, url string, extraHeaders map[string]string, reqID string, created int64, model string, toolsEnabled bool, usageSink UsageSink) error {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	flusher, _ := w.(http.Flusher)
+	sw, ok := w.(*safeStreamWriter)
+	if !ok {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-transform")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		sw = newSafeStreamWriter(w)
+		sw.WriteData([]byte(": worker-cn-2api connected\n\n"))
+	}
 
 	var usage *transform.Usage
 
 	acc := transform.NewStreamAccumulator(reqID, created, model, toolsEnabled, func(chunk string) {
-		w.Write([]byte(chunk))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		sw.WriteData([]byte(chunk))
 	})
 
 	err := b.openStreamAsync(ctx, url, jsonBody, extraHeaders, func(line string) error {
@@ -679,14 +832,14 @@ func (b *OpenAiBridge) handleStream(ctx context.Context, w http.ResponseWriter, 
 		clearDelta(errChunk)
 		setError(errChunk, err.Error())
 		errBytes, _ := marshalNoEscape(errChunk)
-		w.Write([]byte("data: " + string(errBytes) + "\n\n"))
+		sw.WriteData([]byte("data: " + string(errBytes) + "\n\n"))
 		return &StreamReportedError{Err: err}
 	} else {
 		doneChunk := transform.MakeChunk(reqID, created, model)
 		writeFinishReason(doneChunk, acc.FinishReason())
 		clearDelta(doneChunk)
 		doneBytes, _ := marshalNoEscape(doneChunk)
-		w.Write([]byte("data: " + string(doneBytes) + "\n\n"))
+		sw.WriteData([]byte("data: " + string(doneBytes) + "\n\n"))
 	}
 
 	// Emit the usage frame before [DONE] (OpenAI stream_options.include_usage
@@ -696,19 +849,13 @@ func (b *OpenAiBridge) handleStream(ctx context.Context, w http.ResponseWriter, 
 		usageChunk["choices"] = []map[string]interface{}{}
 		usageChunk["usage"] = usage
 		usageBytes, _ := marshalNoEscape(usageChunk)
-		w.Write([]byte("data: " + string(usageBytes) + "\n\n"))
+		sw.WriteData([]byte("data: " + string(usageBytes) + "\n\n"))
 		if usageSink != nil {
 			usageSink(usage)
 		}
 	}
 
-	if flusher != nil {
-		flusher.Flush()
-	}
-	w.Write([]byte("data: [DONE]\n\n"))
-	if flusher != nil {
-		flusher.Flush()
-	}
+	sw.WriteData([]byte("data: [DONE]\n\n"))
 	return nil
 }
 
@@ -902,6 +1049,13 @@ func MakeChatHandler(resolver BridgeResolver, rec *stats.Recorder) http.HandlerF
 			var valErr *models.UnsupportedModelError
 			if errors.As(err, &valErr) {
 				writeError(w, 400, "invalid_request_error", valErr.Error())
+				record(false)
+				return
+			}
+			var qErr *QueueTimeoutError
+			if errors.As(err, &qErr) {
+				w.Header().Set("Retry-After", "3")
+				writeError(w, 429, "rate_limit_error", "upstream busy: queue timeout")
 				record(false)
 				return
 			}
