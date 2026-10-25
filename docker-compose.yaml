@@ -1,14 +1,24 @@
 services:
-  qoder2api:
+  worker-cn-2api:
     build: .
-    platform: linux/amd64
+    image: worker-cn-2api:latest
+    container_name: worker-cn-2api
     restart: unless-stopped
     ports:
       - "10081:10081"
     environment:
-      QODER_DATA_PATH: /app/data/data.json
+      WORKER_HOST: "0.0.0.0"
+      WORKER_PORT: "10081"
+      WORKER_DATA_PATH: /app/data/data.json
+      TZ: "Asia/Shanghai"
+      WORKER_MAX_CONCURRENCY: "2"
+      # WorkBuddy CN 授权 Token (配置后自动激活 WorkBuddy 渠道支持 deepseek-v3/r1、hunyuan-code 等)
+      # WORKER_WORKBUDDY_TOKEN: "your-workbuddy-auth-token"
     volumes:
-      - qoder2api-data:/app/data
-
-volumes:
-  qoder2api-data:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:10081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
