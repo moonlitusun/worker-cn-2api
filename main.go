@@ -62,6 +62,10 @@ func (p *bridgeProvider) currentBridge() *bridge.OpenAiBridge {
 	return p.bridge
 }
 
+func newWorkBuddyBridge(st *store.Store) *workbuddy.Bridge {
+	return workbuddy.NewBridge(workbuddy.ResolveConfig(st.GetWorkBuddyToken()))
+}
+
 // healthHandler serves an unauthenticated liveness/readiness probe. It is
 // deliberately cheap (no upstream calls, no session bootstrap): the body
 // carries readiness details (PAT configured, effective stream timeouts)
@@ -180,8 +184,8 @@ func main() {
 	}
 
 	// Initialize WorkBuddy bridge
-	wbConfig := workbuddy.ResolveConfig("")
-	wbBridge := workbuddy.NewBridge(wbConfig)
+	wbBridge := newWorkBuddyBridge(st)
+	wbConfig := wbBridge.Config()
 	if wbConfig.Token != "" {
 		log.Printf("[workbuddy] backend ready (user=%s device=%s)", wbConfig.UserID, wbConfig.DeviceID)
 	} else {

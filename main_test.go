@@ -110,3 +110,24 @@ func TestUnifiedChatRejectsConflictingReasoningBeforeRouting(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkBuddyStartupRestoresSavedToken(t *testing.T) {
+	t.Setenv("WORKER_WORKBUDDY_TOKEN", "")
+	t.Setenv("CODEBUDDY_AUTH_TOKEN", "")
+	file := t.TempDir() + "/data.json"
+	original, err := store.New(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := original.SetWorkBuddyToken("saved-workbuddy-token"); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.New(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newWorkBuddyBridge(reopened)
+	if b.Config().Token != "saved-workbuddy-token" {
+		t.Fatal("saved token lost on startup")
+	}
+}
