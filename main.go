@@ -190,6 +190,7 @@ func main() {
 
 	// Initialize admin
 	adminInst := admin.New(st, modelFetcher, rec)
+	adminInst.SetWorkBuddyBridge(wbBridge)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", makeUnifiedChatHandler(st, provider, wbBridge, rec))

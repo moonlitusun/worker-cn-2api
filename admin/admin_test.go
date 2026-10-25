@@ -121,6 +121,40 @@ func TestPATSetAndGet(t *testing.T) {
 	}
 }
 
+func TestWorkBuddySetAndGet(t *testing.T) {
+	a, _ := newAdmin(t)
+	w := doRequest(t, a.handleWorkBuddy, "POST", "/admin/api/workbuddy", map[string]string{"token": "wb_test_token_123456789"})
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	w = doRequest(t, a.handleWorkBuddy, "GET", "/admin/api/workbuddy", nil)
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "wb_test_token_123456789") {
+		t.Error("response must not leak the plaintext WorkBuddy token")
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["configured"] != true {
+		t.Errorf("expected configured=true, got %v", resp["configured"])
+	}
+	if !strings.HasPrefix(resp["token_masked"].(string), "wb_t") {
+		t.Errorf("expected masked token, got %v", resp["token_masked"])
+	}
+
+	// Test DELETE
+	w = doRequest(t, a.handleWorkBuddy, "DELETE", "/admin/api/workbuddy", nil)
+	if w.Code != 200 {
+		t.Errorf("expected 200 on DELETE, got %d", w.Code)
+	}
+	w = doRequest(t, a.handleWorkBuddy, "GET", "/admin/api/workbuddy", nil)
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["configured"] != false {
+		t.Errorf("expected configured=false after DELETE, got %v", resp["configured"])
+	}
+}
+
 func TestMaskPAT(t *testing.T) {
 	tests := []struct {
 		input    string

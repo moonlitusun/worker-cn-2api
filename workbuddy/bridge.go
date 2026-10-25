@@ -37,6 +37,17 @@ func (b *Bridge) Config() *Config {
 	return b.cfg
 }
 
+// UpdateToken updates the active auth token and recomputes the device ID.
+func (b *Bridge) UpdateToken(token string) {
+	b.cfg.Token = token
+	if b.cfg.UserID == "" || strings.HasPrefix(b.cfg.UserID, "default") {
+		if len(token) > 16 {
+			b.cfg.UserID = token[:16]
+		}
+	}
+	b.cfg.DeviceID = DeriveDeviceID(b.cfg.UserID)
+}
+
 // HandleChat processes an incoming chat completion request for WorkBuddy models.
 func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, reqBody map[string]interface{}) error {
 	stream, _ := reqBody["stream"].(bool)

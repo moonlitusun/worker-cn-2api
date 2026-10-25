@@ -9,10 +9,10 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Qoder-2API 管理控制台</title>
+<title>Worker-CN-2API 管理控制台</title>
 <script>
 try {
-  var t = localStorage.getItem('qoder2api-theme');
+  var t = localStorage.getItem('worker-cn-2api-theme') || localStorage.getItem('qoder2api-theme');
   var dark = t === 'dark' || (t !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
 } catch (e) {}
@@ -753,9 +753,9 @@ input[readonly] {
 <!-- Login -->
 <div id="loginPage" class="login-wrap">
   <div class="login-card">
-    <div class="login-mark">Q</div>
-    <div class="login-title">Qoder-2API</div>
-    <div class="login-subtitle">管理控制台 · 请输入管理密码</div>
+    <div class="login-mark">W</div>
+    <div class="login-title">Worker-CN-2API</div>
+    <div class="login-subtitle">国内 AI Coding Worker 统一中继网关 · 请输入管理密码</div>
     <input type="password" id="loginPassword" class="login-input" placeholder="管理密码" autofocus autocomplete="current-password">
     <button class="login-btn" type="button" onclick="doLogin()">登 录</button>
     <div id="loginError" class="login-error"></div>
@@ -769,10 +769,10 @@ input[readonly] {
   <!-- Desktop sidebar -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark">Q</div>
+      <div class="brand-mark">W</div>
       <div>
-        <div class="brand-name">Qoder-2API</div>
-        <div class="brand-sub">管理控制台</div>
+        <div class="brand-name">Worker-CN-2API</div>
+        <div class="brand-sub">多平台中继网关</div>
       </div>
     </div>
     <nav class="nav">
@@ -787,7 +787,7 @@ input[readonly] {
       </button>
       <button class="nav-item" data-page="token" onclick="switchPage('token')">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5V3.5h10v3"/><path d="M3.5 6.5h9l.5 7h-10l.5-7z"/><path d="M10.5 6.5v-2a2.5 2.5 0 0 0-5 0v2"/></svg>
-        <span>令牌</span>
+        <span>渠道凭证</span>
       </button>
       <button class="nav-item" data-page="models" onclick="switchPage('models')">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>
@@ -920,17 +920,24 @@ input[readonly] {
       </div>
     </section>
 
-    <!-- Token -->
+    <!-- Providers / Tokens -->
     <section id="page-token" class="page hidden">
       <div class="page-head">
-        <div class="page-title">Qoder 令牌</div>
-        <div class="page-desc">Qoder 个人访问令牌，API 桥接运行必须配置</div>
+        <div class="page-title">渠道凭证 (Providers)</div>
+        <div class="page-desc">配置各平台后端访问凭据，保存后即刻热更新生效</div>
       </div>
 
+      <!-- Qoder 卡片 -->
       <div class="card">
-        <div class="card-head"><div class="card-title">访问令牌</div></div>
+        <div class="card-head">
+          <div class="card-title">
+            阿里 Qoder (PAT 令牌)
+            <small>用于桥接通义千问后台模型（DeepSeek-Flash、Qwen3.8-Max、GLM-5.3、Kimi 等）</small>
+          </div>
+          <span id="qoderBadge" class="badge">检查中...</span>
+        </div>
         <div class="card-body">
-          <p class="hint">令牌变更后，桥接会话将在下一次请求时自动重建。</p>
+          <p class="hint">Qoder 个人访问令牌（Personal Access Token），格式通常为 pt-xxxxxx。保存后会话将在下一次请求时自动重建。</p>
           <div class="row">
             <label>当前令牌</label>
             <div class="field"><input type="text" id="patDisplay" readonly></div>
@@ -940,7 +947,33 @@ input[readonly] {
             <div class="field"><input type="text" id="patInput" placeholder="pt-..." autocomplete="off"></div>
           </div>
           <div class="btn-row right">
-            <button class="btn" type="button" onclick="savePAT()">保存</button>
+            <button class="btn" type="button" onclick="savePAT()">保存 Qoder 令牌</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- WorkBuddy 卡片 -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">
+            腾讯 WorkBuddy / CodeBuddy (授权 Token)
+            <small>用于桥接腾讯 Copilot 后台模型（deepseek-v3、deepseek-r1 深度思考、混元 hunyuan-code 等）</small>
+          </div>
+          <span id="wbBadge" class="badge">检查中...</span>
+        </div>
+        <div class="card-body">
+          <p class="hint">可在此处直接填入 Token，或配置环境变量 WORKER_WORKBUDDY_TOKEN。系统会自动基于 Token 计算确定性硬件指纹 (derive_id) 防范风控。</p>
+          <div class="row">
+            <label>当前令牌</label>
+            <div class="field"><input type="text" id="wbDisplay" readonly placeholder="未配置"></div>
+          </div>
+          <div class="row">
+            <label>新令牌</label>
+            <div class="field"><input type="text" id="wbInput" placeholder="填入 auth_token 或从 workbuddy-desktop.info 复制" autocomplete="off"></div>
+          </div>
+          <div class="btn-row right">
+            <button class="btn danger sm" type="button" onclick="clearWorkBuddy()">清空</button>
+            <button class="btn" type="button" onclick="saveWorkBuddy()">保存 WorkBuddy 令牌</button>
           </div>
         </div>
       </div>
@@ -1155,7 +1188,7 @@ function switchPage(name) {
   });
   if (name === 'stats') loadStats();
   if (name === 'keys') loadKeys();
-  if (name === 'token') loadPAT();
+  if (name === 'token') loadProviders();
   if (name === 'models') loadModels();
   if (name === 'config') loadConfig();
 }
@@ -1346,12 +1379,27 @@ function deleteKey(id) {
     .catch(function(e) { showToast(e.message, 'error'); });
 }
 
-/* ---------- PAT ---------- */
+/* ---------- Providers (Qoder & WorkBuddy) ---------- */
+
+function loadProviders() {
+  loadPAT();
+  loadWorkBuddy();
+}
 
 function loadPAT() {
   api('/pat').then(function(data) {
     document.getElementById('patDisplay').value = data.pat_masked || '';
     document.getElementById('patInput').value = '';
+    var b = document.getElementById('qoderBadge');
+    if (b) {
+      if (data.pat_masked) {
+        b.className = 'badge ok';
+        b.textContent = '已连接';
+      } else {
+        b.className = 'badge bad';
+        b.textContent = '未配置';
+      }
+    }
   }).catch(function(e) { showToast(e.message, 'error'); });
 }
 
@@ -1359,7 +1407,39 @@ function savePAT() {
   var pat = document.getElementById('patInput').value.trim();
   if (!pat) { showToast('PAT 不能为空', 'error'); return; }
   api('/pat', { method: 'POST', body: JSON.stringify({ pat: pat }) })
-    .then(function() { showToast('令牌已保存'); loadPAT(); })
+    .then(function() { showToast('Qoder 令牌已保存'); loadPAT(); })
+    .catch(function(e) { showToast(e.message, 'error'); });
+}
+
+function loadWorkBuddy() {
+  api('/workbuddy').then(function(data) {
+    document.getElementById('wbDisplay').value = data.token_masked || '';
+    document.getElementById('wbInput').value = '';
+    var b = document.getElementById('wbBadge');
+    if (b) {
+      if (data.configured) {
+        b.className = 'badge ok';
+        b.textContent = '已连接';
+      } else {
+        b.className = 'badge bad';
+        b.textContent = '未配置';
+      }
+    }
+  }).catch(function(e) { showToast(e.message, 'error'); });
+}
+
+function saveWorkBuddy() {
+  var token = document.getElementById('wbInput').value.trim();
+  if (!token) { showToast('WorkBuddy Token 不能为空', 'error'); return; }
+  api('/workbuddy', { method: 'POST', body: JSON.stringify({ token: token }) })
+    .then(function() { showToast('WorkBuddy 令牌已保存并热生效'); loadWorkBuddy(); })
+    .catch(function(e) { showToast(e.message, 'error'); });
+}
+
+function clearWorkBuddy() {
+  if (!confirm('确定清空 WorkBuddy 令牌？')) return;
+  api('/workbuddy', { method: 'DELETE' })
+    .then(function() { showToast('WorkBuddy 令牌已清空'); loadWorkBuddy(); })
     .catch(function(e) { showToast(e.message, 'error'); });
 }
 
@@ -1373,15 +1453,25 @@ function loadModels() {
       g.innerHTML = '<p class="hint" style="margin:0">暂无可用模型</p>';
       return;
     }
-    data.models.forEach(function(m) {
+    data.models.forEach(function(item) {
+      var name = typeof item === 'string' ? item : item.name;
+      var prov = typeof item === 'string' ? 'qoder' : (item.provider || 'qoder');
+      var provLabel = prov === 'workbuddy' ? 'WorkBuddy' : 'Qoder';
+      var badgeCls = prov === 'workbuddy' ? 'badge ok' : 'badge';
+
       var d = document.createElement('div');
       d.className = 'model-item';
-      d.innerHTML = '<span class="mono">' + escapeHtml(m) + '</span>';
+      d.style.display = 'flex';
+      d.style.alignItems = 'center';
+      d.style.justifyContent = 'space-between';
+      d.style.gap = '10px';
+
+      d.innerHTML = '<div style="display:flex;align-items:center;gap:8px;"><span class="mono">' + escapeHtml(name) + '</span><span class="' + badgeCls + '" style="font-size:10px;padding:1px 6px;">' + provLabel + '</span></div>';
       var copyBtn = document.createElement('button');
       copyBtn.className = 'btn secondary sm';
       copyBtn.type = 'button';
       copyBtn.textContent = '复制';
-      copyBtn.addEventListener('click', function() { copyText(m); });
+      copyBtn.addEventListener('click', function() { copyText(name); });
       d.appendChild(copyBtn);
       g.appendChild(d);
     });

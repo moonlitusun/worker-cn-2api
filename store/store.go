@@ -30,9 +30,10 @@ type APIKey struct {
 // Config is the on-disk JSON structure.
 type Config struct {
 	Host     string      `json:"host"`
-	Port     int         `json:"port"`
-	PAT      string      `json:"pat"`
-	Password string      `json:"password"`
+	Port               int         `json:"port"`
+	PAT                string      `json:"pat"`
+	WorkBuddyToken     string      `json:"workbuddy_token,omitempty"`
+	Password           string      `json:"password"`
 	APIKeys  []APIKey    `json:"api_keys"`
 	Stats    *stats.Data `json:"stats,omitempty"`
 	// ChatTimeoutSeconds bounds how long the upstream chat stream may take
@@ -292,6 +293,21 @@ func (s *Store) GetPAT() string {
 func (s *Store) SetPAT(pat string) error {
 	s.mu.Lock()
 	s.config.PAT = pat
+	s.mu.Unlock()
+	return s.save()
+}
+
+// --- WorkBuddy ---
+
+func (s *Store) GetWorkBuddyToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.WorkBuddyToken
+}
+
+func (s *Store) SetWorkBuddyToken(token string) error {
+	s.mu.Lock()
+	s.config.WorkBuddyToken = token
 	s.mu.Unlock()
 	return s.save()
 }

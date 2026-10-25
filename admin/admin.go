@@ -20,6 +20,7 @@ import (
 	"qoder2api/models"
 	"qoder2api/stats"
 	"qoder2api/store"
+	"qoder2api/workbuddy"
 )
 
 const sessionDuration = 24 * time.Hour
@@ -32,9 +33,15 @@ type Admin struct {
 	store        *store.Store
 	modelFetcher ModelFetcher
 	stats        *stats.Recorder
+	wbBridge     *workbuddy.Bridge
 	sessions     map[string]time.Time
 	sessionMu    sync.Mutex
 	limiter      *loginLimiter
+}
+
+// SetWorkBuddyBridge attaches the WorkBuddy bridge for hot updates.
+func (a *Admin) SetWorkBuddyBridge(wb *workbuddy.Bridge) {
+	a.wbBridge = wb
 }
 
 // ModelFetcher returns the current model catalog (dynamic or fallback).
@@ -65,6 +72,7 @@ func (a *Admin) RegisterRoutes(mux *http.ServeMux) {
 	// Protected API endpoints (require auth)
 	mux.HandleFunc("/admin/api/keys", a.requireAuth(a.handleKeys))
 	mux.HandleFunc("/admin/api/pat", a.requireAuth(a.handlePAT))
+	mux.HandleFunc("/admin/api/workbuddy", a.requireAuth(a.handleWorkBuddy))
 	mux.HandleFunc("/admin/api/models", a.requireAuth(a.handleModels))
 	mux.HandleFunc("/admin/api/stats", a.requireAuth(a.handleStats))
 	mux.HandleFunc("/admin/api/config", a.requireAuth(a.handleConfig))
@@ -547,6 +555,60 @@ func (a *Admin) handlePAT(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- WorkBuddy endpoint ---
+
+func (a *Admin) handleWorkBuddy(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		token := a.store.GetWorkBuddyToken()
+		if token == "" && a.wbBridge != nil {
+			token = a.wbBridge.Config().Token
+		}
+		configured := token != ""
+		masked := ""
+		if configured {
+			if len(token) <= 8 {
+				masked = "********"
+			} else {
+				masked = token[:4] + "...." + token[len(token)-4:]
+			}
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"configured":   configured,
+			"token_masked": masked,
+			"models":       workbuddy.SupportedModelIDs(),
+		})
+	case http.MethodPost:
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := readJSON(w, r, &body); err != nil {
+			writeJSONError(w, 400, "请求格式错误")
+			return
+		}
+		token := body.Token
+		if err := a.store.SetWorkBuddyToken(token); err != nil {
+			writeJSONError(w, 500, err.Error())
+			return
+		}
+		if a.wbBridge != nil {
+			a.wbBridge.UpdateToken(token)
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	case http.MethodDelete:
+		if err := a.store.SetWorkBuddyToken(""); err != nil {
+			writeJSONError(w, 500, err.Error())
+			return
+		}
+		if a.wbBridge != nil {
+			a.wbBridge.UpdateToken("")
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	default:
+		writeJSONError(w, 405, "方法不允许")
+	}
+}
+
 // --- Models endpoint ---
 
 func (a *Admin) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -554,15 +616,32 @@ func (a *Admin) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 405, "方法不允许")
 		return
 	}
-	var modelList []string
+	type modelEntry struct {
+		Name     string `json:"name"`
+		Provider string `json:"provider"`
+	}
+
+	var qoderModels []string
 	if a.modelFetcher != nil {
-		modelList = a.modelFetcher(r.Context())
+		qoderModels = a.modelFetcher(r.Context())
 	}
-	if modelList == nil {
+	if qoderModels == nil {
 		catalog := models.DefaultCatalog()
-		modelList = catalog.Keys()
+		qoderModels = catalog.Keys()
 	}
-	writeJSON(w, 200, map[string]interface{}{"models": modelList})
+
+	var allEntries []modelEntry
+	for _, m := range qoderModels {
+		allEntries = append(allEntries, modelEntry{Name: m, Provider: "qoder"})
+	}
+	for _, m := range workbuddy.SupportedModelIDs() {
+		allEntries = append(allEntries, modelEntry{Name: m, Provider: "workbuddy"})
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"models":  allEntries,
+		"raw_ids": qoderModels,
+	})
 }
 
 // --- Stats endpoint ---
