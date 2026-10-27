@@ -968,10 +968,7 @@ input[readonly] {
       <!-- WorkBuddy 卡片 -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">
-            腾讯 WorkBuddy 中国区 (授权 Token)
-            
-          </div>
+          <div class="card-title">WorkBuddy CN</div>
           <span id="wbBadge" class="badge">检查中...</span>
         </div>
         <div class="card-body">
@@ -985,13 +982,13 @@ input[readonly] {
           </div>
           <div class="btn-row right">
             <button class="btn danger sm" type="button" onclick="clearWorkBuddy()">清空</button>
-            <button class="btn" type="button" onclick="saveWorkBuddy()">保存 WorkBuddy 令牌</button>
+            <button class="btn" type="button" onclick="saveWorkBuddy()">保存</button>
           </div>
         </div>
       </div>
       <div class="card">
         <div class="card-head">
-          <div class="card-title">字节 Trae 中国区</div>
+          <div class="card-title">Trae CN</div>
           <span id="traeBadge" class="badge">检查中...</span>
         </div>
         <div class="card-body">
