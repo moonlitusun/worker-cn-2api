@@ -1,74 +1,29 @@
-# Worker-CN-2API
+# worker-cn-2api
 
-> 将国内 AI 服务（QoderWork、腾讯 WorkBuddy）桥接为 OpenAI 兼容 API。
+将 Qoder、WorkBuddy 和 Trae **中国区**账号接入 OpenAI Chat Completions 客户端（包括 Cora）。
 
-本项目在 [Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go) 基础上演进，支持聚合接入 Qoder 和 WorkBuddy，将上游专有协议转换为标准的 OpenAI 接口格式（`/v1/chat/completions` 和 `/v1/models`），便于接入 NextChat、Chatbox、Cherry Studio、Cline、Cursor 等客户端。
+## Docker Compose 部署（推荐）
 
-## 功能特性
+已发布镜像：[moonlitusun/worker-cn-2api](https://hub.docker.com/r/moonlitusun/worker-cn-2api/tags)，支持 `linux/amd64` 和 `linux/arm64`。无需下载源码或安装 Go。
 
-- **OpenAI API 兼容** —— 支持 `/v1/chat/completions` 与 `/v1/models` 端点，支持流式与非流式调用、多轮对话、图片输入和 Tool Calls
-- **多渠道自动路由** —— 根据请求的 `model` 自动分发至 WorkBuddy 或 Qoder 上游网关，亦可使用 `workbuddy/` 前缀显式指定
-- **思考过程提取** —— 针对 DeepSeek-R1 推理模型，自动解析 `<think>` 标签并转为标准的 `reasoning_content` 流式增量
-- **硬件指纹推导** —— WorkBuddy 适配器内置确定性硬件指纹派生算法（根据 Token 自动计算 `derive_id`、MAC 及 Machine ID），降低触发平台风控的概率
-- **长连接与保活** —— 内置 SSE 心跳机制与首包即刻下发，配合本地并发队列与超时熔断，避免长连接假死与网关 504 超时
-- **真实用量统计** —— 还原上游 token 真实消耗（含 prompt / completion / cached / reasoning tokens），支持 Qoder 的 credits 扣费与折扣统计
-- **Web 管理面板** —— 中文管理界面（支持深浅模式），可在线管理 API 密钥、配置 PAT 与 WorkBuddy Token、查看模型列表及近 24 小时调用趋势
-- **单文件部署** —— 纯 Go 编写（仅使用 `uuid` 外部依赖），内存占用低，零外部运行时依赖
+### 1. 创建配置
 
-## 支持的模型
-
-### WorkBuddy 渠道
-
-| 模型名称 | 上游模型 Key | 说明 |
-| :--- | :--- | :--- |
-| `deepseek-v3` | `deepseek-v3` | 通用编程与文本生成模型 |
-| `deepseek-r1` | `deepseek-r1` | 推理模型，支持提取 `reasoning_content` 思考过程 |
-| `hunyuan-code` | `hunyuan-standard-code` | 腾讯混元代码专精模型 |
-| `kimi-k2` | `kimi-k2` | Kimi 长上下文模型 |
-| `glm-4` | `glm-4-plus` | 智谱 GLM-4 模型 |
-
-> 所有 WorkBuddy 模型均同时支持 `workbuddy/<model_id>` 形式的别名调用（如 `workbuddy/deepseek-r1`）。
-
-### Qoder 渠道
-
-| 显示名称 | 内部 Key |
-| :--- | :--- |
-| Qwen3.8-Max | `qmodel_38max` |
-| Qwen3.7-Max | `qmodel_latest` |
-| Qwen3.7-Plus | `qmodel` |
-| Qwen3.6-Flash | `q36fmodel` |
-| DeepSeek-V4-Pro | `dmodel` |
-| DeepSeek-V4-Flash | `dfmodel` |
-| GLM-5.3 | `gmodel` |
-| GLM-5.2 | `gm51model` |
-| Kimi-K2.7-Code | `kmodel` |
-| MiniMax-M2.7 | `mmodel` |
-
-> 以上为内置默认列表，服务启动后会自动从 Qoder 网关拉取最新模型目录。部分模型的图片输入由网关辅助识别提供支持。
-
-## 快速开始
-
-### 方式一：Docker Compose（推荐）
-
-使用 `docker-compose.yaml`：
+新建一个部署目录，在其中保存以下 `docker-compose.yaml`：
 
 ```yaml
 services:
   worker-cn-2api:
-    image: worker-cn-2api:latest
-    build: .
+    image: moonlitusun/worker-cn-2api:1.0.0
     container_name: worker-cn-2api
     restart: unless-stopped
     ports:
       - "10081:10081"
     environment:
+      TZ: Asia/Shanghai
       WORKER_HOST: "0.0.0.0"
       WORKER_PORT: "10081"
       WORKER_DATA_PATH: /app/data/data.json
-      TZ: "Asia/Shanghai"
-      WORKER_MAX_CONCURRENCY: "2"
-      # 也可在启动后直接在 Web 管理面板中配置 Token
-      # WORKER_WORKBUDDY_TOKEN: "your-workbuddy-auth-token"
+      WORKER_ADMIN_PASSWORD: "${WORKER_ADMIN_PASSWORD:?请在 .env 中设置管理密码}"
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -79,262 +34,159 @@ services:
       start_period: 5s
 ```
 
-启动命令：
+在同一目录创建 `.env`，将示例密码替换为自己的强密码：
 
-```bash
-docker-compose up -d
+```dotenv
+WORKER_ADMIN_PASSWORD=请替换为自己的强密码
 ```
 
-### 方式二：直接运行
+### 2. 启动并配置账号
 
-```bash
-# 编译
+```sh
+docker compose up -d
+```
+
+访问 `http://服务器IP:10081/admin`（本机部署使用 `http://localhost:10081/admin`），使用 `.env` 中的密码登录：
+
+1. 在管理页面保存 WorkBuddy 或 Trae 中国区账号 Token。
+2. 创建供客户端使用的 API Key。
+3. 在客户端填写下方 Base URL 和 API Key，并获取模型列表。
+
+配置了 `WORKER_ADMIN_PASSWORD` 时，管理密码由环境变量管理；修改 `.env` 后执行 `docker compose up -d` 生效，不能在管理页面修改。
+
+账号配置、API Key 和统计保存在部署目录的 `data/` 中，重建容器后仍会保留。请妥善保存 `.env` 和 `data/`，不要公开分享。桌面账号凭证不会自动同步到 Docker；也可通过 `WORKER_WORKBUDDY_TOKEN` / `WORKER_TRAE_TOKEN` 环境变量配置渠道。
+
+### 3. 查看日志与更新
+
+```sh
+# 查看日志
+docker compose logs -f --tail=100
+
+# 拉取镜像并重建容器
+docker compose pull
+docker compose up -d
+
+# 停止并删除容器（保留本地 data/）
+docker compose down
+```
+
+上述配置固定使用 `1.0.0`。发布新版本后，将 `image` 的版本号改为目标版本，再执行更新命令；也可使用 `moonlitusun/worker-cn-2api:latest` 跟随最新发布。
+
+## 源码运行
+
+需要 Go 1.22 或更高版本：
+
+```sh
 go build -o worker-cn-2api .
-
-# 启动（默认监听 0.0.0.0:10081）
-./worker-cn-2api
+WORKER_WORKBUDDY_TOKEN='你的中国区 accessToken' ./worker-cn-2api
 ```
 
-收到 `SIGINT`（Ctrl+C）或 `SIGTERM` 时，程序会等待在途请求处理完毕并落盘统计数据后安全退出。
+也可在源码目录使用仓库自带的 `docker-compose.yaml` 本地构建：
 
-## 配置
-
-### 环境变量
-
-系统支持 `WORKER_*` 环境变量，同时完全兼容原有的 `QODER_*` 变量：
-
-| 变量名 | 兼容旧变量 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `WORKER_HOST` | `QODER_HOST` | `0.0.0.0` | 监听地址 |
-| `WORKER_PORT` | `QODER_PORT` | `10081` | 监听端口 |
-| `WORKER_DATA_PATH` | `QODER_DATA_PATH` | `data.json` | 数据文件持久化路径 |
-| `WORKER_ADMIN_PASSWORD` | `QODER_ADMIN_PASSWORD` | `password` | Web 管理面板密码（优先于 data.json） |
-| `WORKER_WORKBUDDY_TOKEN` | `CODEBUDDY_AUTH_TOKEN` | 空 | WorkBuddy 鉴权 Token |
-| `WORKER_MAX_CONCURRENCY` | `QODER_MAX_CONCURRENCY` | `1` | 单账号上游并发数上限，超出部分在本地排队 |
-| `WORKER_QUEUE_TIMEOUT_SECONDS` | - | `120` | 本地排队最大等待超时（秒），超时返回 429 |
-| `WORKER_CHAT_TIMEOUT_SECONDS` | `QODER_CHAT_TIMEOUT_SECONDS` | `120` | Chat 响应头等待超时（1-3600 秒） |
-| `WORKER_IDLE_TIMEOUT_SECONDS` | `QODER_IDLE_TIMEOUT_SECONDS` | `300` | 流式传输空闲超时（秒） |
-
-> 超时时间与渠道 Token 也可在 Web 管理面板中修改并即时生效，无需重启服务。
-
-### 配置文件 (data.json)
-
-首次运行时会自动创建，支持在管理界面在线修改：
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 10081,
-  "pat": "pt-xxxxxxxx",
-  "workbuddy_token": "your-workbuddy-auth-token",
-  "password": "password",
-  "chat_timeout_seconds": 120,
-  "idle_timeout_seconds": 300,
-  "api_keys": [
-    {
-      "id": "c1a2b3d4",
-      "key": "sk-xxxxxxxxxxxxxxxx",
-      "note": "NextChat",
-      "created_at": 1740000000
-    }
-  ]
-}
+```sh
+docker compose up -d --build
 ```
 
-### 健康检查
+未设置 `WORKER_ADMIN_PASSWORD` 时，初始管理密码为 `password`，登录后请修改密码、保存渠道 Token，并创建客户端 API Key。本机运行时可自动读取支持的桌面账号凭证。
 
-`GET /health` 端点无需鉴权，可用于容器探针或反向代理心跳检测：
+## Cora 配置
 
-```json
-{
-  "status": "ok",
-  "has_pat": true,
-  "has_workbuddy": true,
-  "chat_timeout_seconds": 120,
-  "idle_timeout_seconds": 300
-}
+- 协议：OpenAI Chat Completions
+- Base URL：`http://你的服务器:10081/v1`
+- API Key：管理页面创建的 Key
+- 模型：从 `/v1/models` 获取，统一返回 `qoder/<id>`、`workbuddy/<id>` 和 `trae/<id>`，不再重复返回无前缀别名。聊天接口仍兼容旧的 WorkBuddy 原始 ID 配置。
+
+不再提供旧的 `hunyuan-code`、`deepseek-v3` 等硬编码别名，也不会把无效模型悄悄映射到其他模型。聊天请求将原始模型 ID 交给上游验证。
+
+## API
+
+| 接口 | 说明 |
+|---|---|
+| `POST /v1/chat/completions` | Bearer API Key；流式、非流式聚合、工具调用、推理内容 |
+| `GET /v1/models` | Bearer API Key；中国区实时模型目录，成功后缓存一小时 |
+| `GET /health` | 无需鉴权；服务状态及 `has_workbuddy` / `has_trae` 凭证配置状态（不代表账号已验证） |
+| `/admin` | 中文管理界面：Token、API Key、模型目录、调用统计、服务配置 |
+
+WorkBuddy 上游聊天地址默认为 `https://www.workbuddy.cn/v2/chat/completions`，目录来自同域 `/v2/enterprises/personal/models`。目录请求失败会返回错误，不会展示虚构的内置列表；聊天不依赖目录请求成功。多个渠道同时配置时，目录包含所有已配置渠道；任一渠道目录失败则明确返回错误。
+
+WorkBuddy 上游始终使用 SSE，客户端非流式请求会在服务端聚合。工具定义、工具结果、多段 `tool_calls`、推理、用量及结束原因会保留。指定函数形式的 `tool_choice` 会转换为只保留该工具并设置 `required`，兼容上游只接受字符串的约束。上游接受请求之前不写入 HTTP 200；上游 HTTP 错误返回具体状态与详情，流开始后的错误使用 SSE `error` 对象返回。
+
+## 环境变量
+
+| 变量 | 默认值 / 说明 |
+|---|---|
+| `WORKER_HOST` | `0.0.0.0` |
+| `WORKER_PORT` | `10081` |
+| `WORKER_DATA_PATH` | `data.json`；Docker 为 `/app/data/data.json` |
+| `WORKER_ADMIN_PASSWORD` | 覆盖管理密码 |
+| `WORKER_WORKBUDDY_TOKEN` | 中国区 accessToken；优先级：管理页面保存值、此变量、`CODEBUDDY_AUTH_TOKEN`、本地桌面凭证 |
+| `WORKER_WORKBUDDY_ENDPOINT` | 覆盖上游聊天 URL，主要用于测试 |
+| `WORKER_WORKBUDDY_CLIENT_VER` | `5.5.4` |
+| `WORKER_CHAT_TIMEOUT_SECONDS` | `120`，等待上游响应头的超时 |
+| `WORKER_IDLE_TIMEOUT_SECONDS` | `300`，上游流无数据超时 |
+
+可在管理页面调整响应头、空闲超时，对新请求即时生效。每个账号最多两个并发请求，等待队列超过 15 秒返回 429。Token 到期后需更新；当前不自动刷新 OAuth 凭证。
+
+以上并发和手动更新策略适用于 WorkBuddy。Trae 使用下述独立策略。
+
+## Qoder CN
+
+模型目录来自已验证的 Qoder 会话，以 `qoder/` 前缀展示。旧的无前缀 Qoder 显示名按真实目录匹配，WorkBuddy 和 Trae 的显式前缀保持独立路由。原有 PAT 保存在 `pat` 字段，不会被其他渠道配置或统计保存覆盖。
+
+## Trae CN
+
+使用 `solo_work_lite` 兼容聊天通道：
+
+- 鉴权为 `Cloud-IDE-JWT`，聊天路径 `/api/agent/v3/llm_utils_chat`，模型目录 `/api/ide/v1/get_detail_param`。
+- 模型目录按账号缓存一小时，凭证变化后失效；只显示可见且启用的配置，过滤已确认属于 raw-agent 通道的配置。模型出现在目录中不保证当前套餐可调用。
+- 支持文本、推理内容输出、函数工具调用及结果续轮、流式和非流式聚合、用量返回。流式用量需设置 `stream_options.include_usage=true`。
+- 显式指定函数的 `tool_choice` 转成函数名；工具参数 schema 转成上游所需的字符串。错误、截断及缺少终止事件不会伪报成功。
+- 当前不支持图片、Remote/workflow Agent、Responses API、`reasoning_effort`、`thinking`、`response_format` 或 `parallel_tool_calls` 控制；这些请求明确返回 400，不暗中换模型或通道。上游模型仍可自然产生推理内容。
+- 每个 Bridge 采用一个并发槽位与 15 秒排队上限；这是保守的本地调度策略，不代表实测账号并发上限。流建立后每 3 秒发送心跳。
+
+本机运行时，未配置 Token 会依次尝试读取 `TRAE SOLO CN`、`Trae-CN` 的 `User/globalStorage/storage.json`，仅支持已验证的 `tc` AES 凭证格式。macOS 根目录为 `~/Library/Application Support`，Windows 为 `%APPDATA%`，Linux 为 `~/.config`；不改写桌面客户端文件。
+
+包含 RefreshToken 的会话在到期前一分钟自动刷新，并把轮换会话写入本服务的 `data.json`（文件权限 0600）。过期时间来自会话字段或 JWT `exp`。手动配置只有 Token 时不自动刷新；刷新失败需重新登录或更新凭据。管理页面可选择 Trae Code CN / SOLO CN 产品类型并填入可选刷新凭据。清空渠道后本次运行立即停用；重启后仍会按环境变量和桌面凭据进行自动发现。
+
+| 变量 | 默认值 / 说明 |
+|---|---|
+| `WORKER_TRAE_TOKEN` | 原始 Cloud-IDE-JWT，不带前缀；优先使用管理页面保存的会话 |
+| `WORKER_TRAE_USER_ID` | 可选账号 UserID |
+| `WORKER_TRAE_REFRESH_TOKEN` | 可选，需与 Token 属于同一会话 |
+| `WORKER_TRAE_EXPIRES_AT` | 可选 ISO 8601 过期时间；省略时尝试 JWT `exp` |
+| `WORKER_TRAE_CLIENT_ID` | Code CN：`ono9krqynydwx5`；SOLO CN：`en1oxy7wnw8j9n` |
+| `WORKER_TRAE_DEVICE_ID` / `WORKER_TRAE_MACHINE_ID` | 可选，使用账号自己的稳定设备标识 |
+| `WORKER_TRAE_BASE_URL` | `https://trae-api-cn.mchost.guru` |
+| `WORKER_TRAE_AUTH_URL` | `https://api.trae.com.cn` |
+| `WORKER_TRAE_VERSION` / `WORKER_TRAE_VERSION_CODE` | 已验证兼容配置 `0.1.61` / `20260820` |
+
+真实账号检查（只输出结果，不打印凭据；刷新会保存到指定运行配置）：
+
+```sh
+go run ./cmd/trae-probe -models-only
+go run ./cmd/trae-probe -model glm-5.2 -tools
 ```
 
-## 使用说明
+`-model` 使用目录里的原始 ID。第二条会产生少量模型调用和一次无外部副作用的 `ping` 工具续轮。2026-10-26 本机账号已通过自动刷新、目录、`glm-5.2` 流式/非流式及工具续轮验证；未逐个验证目录中的所有模型。
 
-### 1. 配置上游凭证
+WorkBuddy 本地桌面凭证支持新版 `auth.accessToken` 与旧版 `auth_token`，仅接受中国区账号。文件位置：
 
-服务启动后，访问 `http://localhost:10081/admin`（默认密码 `password`，首次登录后请在「设置」中修改）。
+- macOS：`~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`
+- Windows：`%LOCALAPPDATA%/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`
+- Linux：`~/.local/share/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`
 
-在「令牌」页面配置所需渠道：
-- **Qoder PAT**：填入 `pt-` 开头的 PAT 令牌。
-- **WorkBuddy Token**：填入 WorkBuddy 的 `auth_token`。若在装有 WorkBuddy / CodeBuddy 客户端的本机上运行，程序启动时会自动检测本地凭证文件并载入。
+旧配置文件中的 Qoder `pat`、API Key、管理密码、WorkBuddy Token 和统计都会保留。Qoder 可在渠道凭证中管理，兼容 `/admin/api/pat`；也可使用 `WORKER_QODER_PAT` 或 `QODER_PAT`。
 
-### 2. 创建 API Key
+实现细节和真实账号结果见 [Trae 接入完成记录](docs/research/trae-cn-implementation.md)。
 
-在管理界面的「API 密钥」标签页创建密钥，调用 API 时通过 HTTP Header 传入：
+管理后台已补充连接测试、可选短对话测试、到期与续期状态、最近错误、模型搜索和能力信息，以及多个命名账号的手动保存/切换/删除。操作细节见 [后台使用说明](docs/trae-cn-admin-guide.md)。管理页面在单个渠道目录失败时保留其他渠道结果；对外模型 API 仍按严格策略返回错误。
 
-```http
-Authorization: Bearer sk-xxxxxxxxxxxxxxxx
+## 验证
+
+```sh
+go test -race ./...
+go vet ./...
+go build ./...
 ```
 
-### 3. API 调用示例
-
-#### 流式调用 DeepSeek-R1（带思考过程）
-
-```bash
-curl http://localhost:10081/v1/chat/completions \
-  -H "Authorization: Bearer sk-xxxxxxxxxxxxxxxx" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-r1",
-    "messages": [
-      {"role": "user", "content": "9.11 和 9.9 哪个大？"}
-    ],
-    "stream": true
-  }'
-```
-
-#### 调用 Qoder 渠道模型
-
-```bash
-curl http://localhost:10081/v1/chat/completions \
-  -H "Authorization: Bearer sk-xxxxxxxxxxxxxxxx" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Qwen3.7-Max",
-    "messages": [
-      {"role": "user", "content": "你好"}
-    ],
-    "stream": true
-  }'
-```
-
-#### 查询可用模型列表
-
-```bash
-curl http://localhost:10081/v1/models \
-  -H "Authorization: Bearer sk-xxxxxxxxxxxxxxxx"
-```
-
-## API 端点
-
-| 端点 | 方法 | 鉴权要求 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `/v1/chat/completions` | POST | Bearer Key | 对话补全（兼容 OpenAI 格式） |
-| `/v1/models` | GET | Bearer Key | 获取聚合模型列表 |
-| `/health` | GET/HEAD | 无 | 服务健康状态探针 |
-| `/admin` | GET | 无 | Web 管理面板 |
-| `/admin/api/login` | POST | 无 | 管理面板登录（带 IP 退避限流） |
-| `/admin/api/logout` | POST | 无 | 退出登录 |
-| `/admin/api/auth` | GET | 无 | 会话有效性检查 |
-| `/admin/api/keys` | GET/POST/DELETE | Admin 会话 | API 密钥管理 |
-| `/admin/api/pat` | GET/POST | Admin 会话 | Qoder PAT 令牌配置 |
-| `/admin/api/workbuddy` | GET/POST | Admin 会话 | WorkBuddy Token 配置 |
-| `/admin/api/models` | GET | Admin 会话 | 获取当前可用模型列表 |
-| `/admin/api/stats` | GET | Admin 会话 | 请求量与 token 统计数据 |
-| `/admin/api/config` | GET/POST | Admin 会话 | 超时及监听配置 |
-| `/admin/api/password` | POST | Admin 会话 | 修改管理密码 |
-
-## 安全机制
-
-- **HTTP 超时防护**：设置 `ReadHeaderTimeout=10s` 与 `IdleTimeout=120s`，防御 slowloris 慢速连接；SSE 流式响应空闲超时自动断开，防止网关连接卡死
-- **请求体上限**：`/v1/chat/completions` 限制 10 MiB，管理 API 限制 64 KiB，防止大 Payload 占用过多内存
-- **登录限流**：管理面板登录按客户端 IP 计数，密码错误后指数退避锁定（1s 到 30s），锁定期间返回 `429 Too Many Requests`
-- **常量时间比较**：API Key 鉴权与管理密码校验均使用 `crypto/subtle.ConstantTimeCompare`，避免时序侧信道泄露
-- **Cookie 安全策略**：会话 Cookie 设置 `HttpOnly` 与 `SameSite=Lax`，并在 HTTPS 或带 `X-Forwarded-Proto: https` 请求下自动启用 `Secure`
-- **XSS 防护**：Web 面板使用原生 DOM 渲染和事件监听，避免内联脚本注入
-
-## 项目结构
-
-```
-worker-cn-2api/
-├── main.go               # 程序入口与服务生命周期管理
-├── router.go             # 多渠道请求分发与聚合模型处理
-├── admin/                # Web 管理面板与管理 API
-├── auth/                 # Qoder 协议加解密与鉴权
-├── bridge/               # Qoder 网关桥接与并发队列
-├── models/               # Qoder 动态模型目录
-├── stats/                # 请求统计与持久化落盘
-├── store/                # JSON 文件持久化存储
-├── transform/            # Qoder 协议与 OpenAI 协议互转
-├── workbuddy/            # WorkBuddy 协议适配器（指纹派生、思维链提取）
-├── Dockerfile           # Docker 构建文件
-└── docker-compose.yaml  # Docker Compose 配置
-```
-
-## 技术栈
-
-- **语言**：Go 1.22+
-- **依赖**：仅使用 `github.com/google/uuid`，其余全部为标准库
-- **HTTP**：标准库 `net/http`，SSE 流式输出，支持平滑优雅退出
-- **存储**：单文件 JSON 持久化，线程安全读写
-
-## 开发构建与镜像发布
-
-### 本地编译
-
-```bash
-# 运行测试
-go test ./...
-
-# 编译
-go build -o worker-cn-2api .
-
-# 交叉编译（以 Linux arm64 为例）
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o worker-cn-2api-linux-arm64 .
-```
-
-### Docker 镜像构建与发布
-
-本项目提供了完整的 GitHub Actions 自动化 CI 流水线（支持多架构 `linux/amd64` 与 `linux/arm64`）：
-
-#### 1. 自动发布（通过 GitHub Actions 推送至 Docker Hub & GHCR）
-
-1. **Docker Hub 访问令牌配置**：
-   - 登录 [Docker Hub](https://hub.docker.com/) $\rightarrow$ `Account Settings` $\rightarrow$ `Security` $\rightarrow$ `New Access Token`（权限选择 Read & Write）。
-   - 在 GitHub 仓库 `Settings` $\rightarrow$ `Secrets and variables` $\rightarrow$ `Actions` 中添加：
-     - `DOCKERHUB_USERNAME`: Docker Hub 用户名
-     - `DOCKERHUB_TOKEN`: 刚才获取的 Access Token
-2. **打 Tag 自动发布**：
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-   推送后会自动打包多架构镜像并发布到：
-   - `docker.io/<username>/worker-cn-2api:v0.1.0` 与 `:latest`
-   - `ghcr.io/moonlitusun/worker-cn-2api:v0.1.0` 与 `:latest`
-
-#### 2. 本地/服务器手动构建与推送
-
-```bash
-# 登录 Docker Hub
-docker login -u <username>
-
-# 构建并推送到 Docker Hub
-docker build -t <username>/worker-cn-2api:latest .
-docker push <username>/worker-cn-2api:latest
-```
-
-## 许可证
-
-本项目基于 [MIT License](./LICENSE) 开源。
-
-## 免责声明
-
-本项目仅供个人学习与研究目的使用。
-
-1. **本项目不隶属于 Qoder、腾讯或其关联公司**，Qoder 与 WorkBuddy 是其各自所有者的商标。本项目不对任何官方服务提供保证或支持。
-2. **仅供学习交流使用**，不得用于任何商业用途或非法用途。使用者应遵守所在地区的法律法规。
-3. **使用者需自行承担使用风险**，项目维护者不对因使用本项目导致的账号限制、服务中断或数据异常承担直接或连带责任。
-4. **请勿将本项目用于高频爬取、滥用或可能损害服务提供方利益的行为**。请尊重官方平台的服务条款。
-
-
-## 推理开关与参数兼容性
-
-Qoder 与 WorkBuddy 通道共同识别以下客户端思考开关：
-
-- `thinking: {"type": "enabled" | "disabled"}`（Cora 的 DeepSeek 格式）。
-- `reasoning_effort: "none" | "off"` 关闭；`minimal/low/medium/high/xhigh/max` 开启。
-- `enable_thinking: true | false`，或 `chat_template_kwargs.enable_thinking`。
-
-多种写法同时出现时必须一致，否则在访问上游之前返回 HTTP 400；无效类型和枚举同样返回 400。不传开关时保留原有开启行为。
-
-两个上游目前仅映射布尔开关，不保证保留推理强度档位。Qoder 的 `temperature`、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`frequency_penalty`、`presence_penalty`、`seed` 没有已验证的字段映射，会列入 `X-Worker-Unsupported-Parameters` 响应头；开启思考的 `reasoning_effort` 也列出，表示仅应用开关、未应用强度。WorkBuddy 保留原有的 `temperature` 和 `max_tokens` options 映射。
-
-这层映射保证代理向上游发送的开关值，实际模型是否支持关闭仍需针对账号和模型验证。代理不会通过删除模型返回的思考内容来假装关闭思考。
+测试覆盖上游强制流式、流式透传、非流式工具参数拼接、用量、错误返回和动态目录。真实账号可用模型以接口实际返回为准。

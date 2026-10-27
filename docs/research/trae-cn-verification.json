@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-26",
+  "scope": "Trae CN solo_work_lite; current local account",
+  "upstream_model": "glm-5.2",
+  "credential_values_exported": false,
+  "checks": {
+    "startup_and_readiness": "passed",
+    "admin_login_masking_and_controls": "passed",
+    "authenticated_catalog": "passed",
+    "gateway_sync": "passed",
+    "gateway_stream": "passed",
+    "admin_clear_and_hot_restore": "passed",
+    "direct_refresh_catalog_sync_stream_tool_continuation": "passed in prior direct probe",
+    "go_test_race_all": "passed",
+    "go_vet_all": "passed",
+    "macos_build": "passed",
+    "linux_amd64_static_build": "passed",
+    "admin_javascript_syntax": "passed",
+    "runtime_session_mode_0600": "passed"
+  },
+  "model_count": 22
+}

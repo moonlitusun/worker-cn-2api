@@ -77,8 +77,6 @@ func ReasoningEnabled(req map[string]interface{}) (bool, error) {
 	return enabled, nil
 }
 
-// UnsupportedQoderParameters names controls with no verified upstream equivalent.
-// Effort still toggles reasoning; its requested intensity cannot be represented.
 func UnsupportedQoderParameters(req map[string]interface{}) string {
 	fields := []string{}
 	for _, field := range []string{"temperature", "top_p", "max_tokens", "max_completion_tokens", "stop", "frequency_penalty", "presence_penalty", "seed"} {

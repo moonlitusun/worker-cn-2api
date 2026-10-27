@@ -1,36 +1,76 @@
 package workbuddy
 
 import (
-	"bytes"
 	"encoding/json"
-	"qoder2api/requestopts"
-	"strings"
+	"fmt"
+	"worker-cn-2api/requestopts"
 
 	"github.com/google/uuid"
 )
 
-// UpstreamChatRequest defines the JSON payload sent to copilot.tencent.com.
+type RequestError struct{ Message string }
+
+func (e *RequestError) Error() string { return e.Message }
+
+// UpstreamChatRequest defines the JSON payload sent to WorkBuddy CN.
 type UpstreamChatRequest struct {
 	Model    string                   `json:"model"`
 	Messages []map[string]interface{} `json:"messages"`
 	Stream   bool                     `json:"stream"`
 	Options  map[string]interface{}   `json:"options,omitempty"`
 	DeriveID string                   `json:"derive_id"`
+	Extra    map[string]interface{}   `json:"-"`
 }
 
 // BuildUpstreamRequest converts incoming OpenAI request body into the WorkBuddy payload.
 func BuildUpstreamRequest(reqBody map[string]interface{}, upstreamModel string, deriveID string) (*UpstreamChatRequest, error) {
-	stream, _ := reqBody["stream"].(bool)
+	extra := make(map[string]interface{}, len(reqBody))
+	for k, v := range reqBody {
+		extra[k] = v
+	}
+	if choice, ok := reqBody["tool_choice"].(map[string]interface{}); ok {
+		function, _ := choice["function"].(map[string]interface{})
+		name, _ := function["name"].(string)
+		if choice["type"] != "function" || name == "" {
+			return nil, &RequestError{"tool_choice must name a function"}
+		}
+		tools, _ := reqBody["tools"].([]interface{})
+		selected := []interface{}{}
+		for _, raw := range tools {
+			tool, _ := raw.(map[string]interface{})
+			f, _ := tool["function"].(map[string]interface{})
+			if f["name"] == name {
+				selected = append(selected, raw)
+			}
+		}
+		if len(selected) != 1 {
+			return nil, &RequestError{fmt.Sprintf("tool_choice function %q must match one tool", name)}
+		}
+		extra["tools"], extra["tool_choice"] = selected, "required"
+	}
+	stream := true
 
 	rawMessages, _ := reqBody["messages"].([]interface{})
 	messages := make([]map[string]interface{}, 0, len(rawMessages))
 	for _, m := range rawMessages {
 		if mMap, ok := m.(map[string]interface{}); ok {
-			messages = append(messages, mMap)
+			copyMsg := make(map[string]interface{}, len(mMap))
+			for k, v := range mMap {
+				copyMsg[k] = v
+			}
+			if copyMsg["role"] == "developer" {
+				copyMsg["role"] = "system"
+			}
+			messages = append(messages, copyMsg)
 		}
 	}
 
 	options := make(map[string]interface{})
+	if supplied, ok := reqBody["options"].(map[string]interface{}); ok {
+		for k, v := range supplied {
+			options[k] = v
+		}
+	}
 	if temp, ok := reqBody["temperature"]; ok {
 		options["temperature"] = temp
 	}
@@ -49,104 +89,19 @@ func BuildUpstreamRequest(reqBody map[string]interface{}, upstreamModel string, 
 		Stream:   stream,
 		Options:  options,
 		DeriveID: deriveID,
+		Extra:    extra,
 	}, nil
 }
 
-// DeltaExtract represents the extracted content or reasoning delta from an upstream chunk.
-type DeltaExtract struct {
-	Content          string
-	ReasoningContent string
-	FinishReason     string
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	IsDone           bool
-}
-
-// ParseSSELine extracts text, reasoning, and usage from a raw SSE line received from WorkBuddy.
-func ParseSSELine(line string) *DeltaExtract {
-	s := strings.TrimSpace(line)
-	if !strings.HasPrefix(s, "data:") {
-		return nil
+// MarshalJSON preserves OpenAI fields, including tool definitions and sampling controls.
+func (r UpstreamChatRequest) MarshalJSON() ([]byte, error) {
+	body := make(map[string]interface{}, len(r.Extra)+5)
+	for k, v := range r.Extra {
+		body[k] = v
 	}
-	payload := strings.TrimSpace(s[5:])
-	if payload == "[DONE]" {
-		return &DeltaExtract{IsDone: true}
-	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
-		return nil
-	}
-
-	out := &DeltaExtract{}
-
-	// Choices
-	if choices, ok := raw["choices"].([]interface{}); ok && len(choices) > 0 {
-		if first, ok := choices[0].(map[string]interface{}); ok {
-			if fr, ok := first["finish_reason"].(string); ok && fr != "" {
-				out.FinishReason = fr
-			}
-			if delta, ok := first["delta"].(map[string]interface{}); ok {
-				if c, ok := delta["content"].(string); ok {
-					out.Content = c
-				}
-				if r, ok := delta["reasoning_content"].(string); ok {
-					out.ReasoningContent = r
-				}
-			}
-		}
-	}
-
-	// Usage
-	if usage, ok := raw["usage"].(map[string]interface{}); ok {
-		if pt, ok := usage["prompt_tokens"].(float64); ok {
-			out.PromptTokens = int(pt)
-		}
-		if ct, ok := usage["completion_tokens"].(float64); ok {
-			out.CompletionTokens = int(ct)
-		}
-		if tt, ok := usage["total_tokens"].(float64); ok {
-			out.TotalTokens = int(tt)
-		}
-	}
-
-	return out
-}
-
-// MakeOpenAIChunk creates a standard OpenAI-compatible SSE completion chunk.
-func MakeOpenAIChunk(reqID string, created int64, model string, content, reasoning, finishReason string) []byte {
-	delta := make(map[string]interface{})
-	if content != "" {
-		delta["content"] = content
-	}
-	if reasoning != "" {
-		delta["reasoning_content"] = reasoning
-	}
-
-	choice := map[string]interface{}{
-		"index": 0,
-		"delta": delta,
-	}
-	if finishReason != "" {
-		choice["finish_reason"] = finishReason
-	} else {
-		choice["finish_reason"] = nil
-	}
-
-	chunk := map[string]interface{}{
-		"id":      reqID,
-		"object":  "chat.completion.chunk",
-		"created": created,
-		"model":   model,
-		"choices": []interface{}{choice},
-	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(chunk)
-	return append([]byte("data: "), bytes.TrimRight(buf.Bytes(), "\n")...)
+	body["model"], body["messages"], body["stream"] = r.Model, r.Messages, true
+	body["options"], body["derive_id"] = r.Options, r.DeriveID
+	return json.Marshal(body)
 }
 
 // NewRequestID generates a standard OpenAI-style chat completion ID.

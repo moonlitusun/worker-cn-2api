@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"qoder2api/auth"
-	"qoder2api/stats"
-	"qoder2api/transform"
+	"worker-cn-2api/qoder/auth"
+	"worker-cn-2api/qoder/transform"
+	"worker-cn-2api/stats"
 )
 
 func TestChatRouteReturns401WithoutBearerToken(t *testing.T) {

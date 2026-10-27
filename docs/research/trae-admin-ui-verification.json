@@ -1,0 +1,21 @@
+{
+  "login": "passed",
+  "fresh_connection_probe_and_failure": "passed",
+  "short_chat": "passed",
+  "save_and_switch_accounts": "passed",
+  "refresh_credentials_preserved": "passed",
+  "model_search_and_filter": "passed",
+  "copy_model_id": "passed",
+  "mobile_390px_no_overflow": "passed",
+  "page_errors": [],
+  "fixture_only": true,
+  "backend_checks": {
+    "go_test_race_all": "passed",
+    "go_vet_all": "passed",
+    "macos_build": "passed",
+    "linux_amd64_static_build": "passed",
+    "refresh_before_named_account_switch": "passed"
+  },
+  "notes_sync": "7 files updated in user-specified notes directory",
+  "account_management": "named profiles with manual switching"
+}

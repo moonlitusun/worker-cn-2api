@@ -1,0 +1,7 @@
+.git
+.env
+.env.*
+data/
+data.json
+worker-cn-2api
+*.log

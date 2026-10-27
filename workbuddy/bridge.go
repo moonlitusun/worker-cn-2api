@@ -3,222 +3,294 @@ package workbuddy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// Bridge handles WorkBuddy API requests with admission control and streaming.
 type Bridge struct {
-	cfg       *Config
-	client    *Client
-	chatSlots chan struct{}
+	client       *Client
+	chatSlots    chan struct{}
+	catalogMu    sync.Mutex
+	catalog      []ModelInfo
+	catalogAt    time.Time
+	catalogToken string
 }
 
-// NewBridge creates a new WorkBuddy Bridge instance.
 func NewBridge(cfg *Config) *Bridge {
-	concurrency := 2
-	if cfg.Concurrency > 0 {
-		concurrency = cfg.Concurrency
+	n := cfg.Concurrency
+	if n <= 0 {
+		n = 2
 	}
-	return &Bridge{
-		cfg:       cfg,
-		client:    NewClient(cfg),
-		chatSlots: make(chan struct{}, concurrency),
-	}
+	return &Bridge{client: NewClient(cfg), chatSlots: make(chan struct{}, n)}
 }
+func (b *Bridge) Config() *Config          { return b.client.config() }
+func (b *Bridge) UpdateToken(token string) { b.client.updateToken(token) }
 
-// Config returns the active configuration.
-func (b *Bridge) Config() *Config {
-	return b.cfg
-}
+// ReportedError indicates an error already written inside an SSE response.
+type ReportedError struct{ Err error }
 
-// UpdateToken updates the active auth token and recomputes the device ID.
-func (b *Bridge) UpdateToken(token string) {
-	b.cfg.Token = token
-	if b.cfg.UserID == "" || strings.HasPrefix(b.cfg.UserID, "default") {
-		if len(token) > 16 {
-			b.cfg.UserID = token[:16]
-		}
-	}
-	b.cfg.DeviceID = DeriveDeviceID(b.cfg.UserID)
-}
+func (e *ReportedError) Error() string { return e.Err.Error() }
+func (e *ReportedError) Unwrap() error { return e.Err }
 
-// HandleChat processes an incoming chat completion request for WorkBuddy models.
-func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, reqBody map[string]interface{}) error {
-	stream, _ := reqBody["stream"].(bool)
-	modelParam, _ := reqBody["model"].(string)
+type QueueTimeoutError struct{}
 
-	modelInfo, err := ResolveModel(modelParam)
+func (e *QueueTimeoutError) Error() string { return "WorkBuddy CN upstream queue timeout" }
+
+func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map[string]interface{}) error {
+	model, _ := body["model"].(string)
+	model, err := normalizeModel(model)
 	if err != nil {
 		return err
 	}
-
-	upstreamReq, err := BuildUpstreamRequest(reqBody, modelInfo.UpstreamKey, b.cfg.DeviceID)
+	// Exact IDs are passed through; the upstream validates availability. The catalog
+	// is discovery metadata and must not block chat when its endpoint is unavailable.
+	req, err := BuildUpstreamRequest(body, model, b.Config().DeviceID)
 	if err != nil {
 		return err
 	}
-
-	reqID := NewRequestID()
-	created := time.Now().Unix()
-
-	// Admission slot queueing
+	timer := time.NewTimer(15 * time.Second)
+	defer timer.Stop()
 	select {
 	case b.chatSlots <- struct{}{}:
-	default:
-		log.Printf("[workbuddy] all %d slot(s) busy; queuing request", cap(b.chatSlots))
-		select {
-		case b.chatSlots <- struct{}{}:
-		case <-time.After(15 * time.Second):
-			return fmt.Errorf("workbuddy upstream queue timeout")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	case <-timer.C:
+		return &QueueTimeoutError{}
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	defer func() { <-b.chatSlots }()
-
-	if stream {
-		return b.handleStream(ctx, w, upstreamReq, reqID, created, modelInfo.ID)
+	resp, err := b.client.OpenStream(ctx, req)
+	if err != nil {
+		return err
 	}
-	return b.handleSync(ctx, w, upstreamReq, reqID, created, modelInfo.ID)
+	stream, _ := body["stream"].(bool)
+	if stream {
+		return b.handleStream(w, resp)
+	}
+	return b.handleSync(w, resp, model)
 }
 
-func (b *Bridge) handleStream(ctx context.Context, w http.ResponseWriter, upstreamReq *UpstreamChatRequest, reqID string, created int64, model string) error {
+var errDone = errors.New("SSE done")
+
+func parseEvent(line string) (map[string]interface{}, bool, error) {
+	payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if payload == "[DONE]" {
+		return nil, true, nil
+	}
+	var chunk map[string]interface{}
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		return nil, false, fmt.Errorf("invalid WorkBuddy SSE JSON: %w", err)
+	}
+	if chunk == nil {
+		return nil, false, fmt.Errorf("empty WorkBuddy SSE event")
+	}
+	if code, ok := chunk["code"].(float64); ok && code != 0 {
+		return nil, false, fmt.Errorf("WorkBuddy CN code %.0f: %v", code, chunk["msg"])
+	}
+	if raw, ok := chunk["error"]; ok {
+		msg, _ := json.Marshal(raw)
+		return nil, false, fmt.Errorf("WorkBuddy CN stream error: %s", msg)
+	}
+	return chunk, false, nil
+}
+
+func (b *Bridge) handleStream(w http.ResponseWriter, resp *http.Response) error {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, _ := w.(http.Flusher)
-
-	// Thread-safe write helper with idle timestamp tracking
 	var mu sync.Mutex
-	var lastWriteNs atomic.Int64
-	lastWriteNs.Store(time.Now().UnixNano())
-
-	writeData := func(data []byte) {
+	write := func(s string) error {
 		mu.Lock()
 		defer mu.Unlock()
-		lastWriteNs.Store(time.Now().UnixNano())
-		w.Write(data)
-		if flusher != nil {
-			flusher.Flush()
+		_, err := io.WriteString(w, s)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
+		return err
 	}
-
-	// Immediate connected packet to prevent proxy 504 timeouts
-	writeData([]byte(": worker-cn-2api connected\n\n"))
-
-	// Keep-alive heartbeat watchdog
-	stopHeartbeat := make(chan struct{})
-	defer close(stopHeartbeat)
+	if err := write(": worker-cn-2api connected\n\n"); err != nil {
+		resp.Body.Close()
+		return &ReportedError{err}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-stopHeartbeat:
+			case <-stop:
 				return
 			case <-ticker.C:
-				if time.Since(time.Unix(0, lastWriteNs.Load())) >= 3*time.Second {
-					mu.Lock()
-					if flusher != nil {
-						w.Write([]byte(": ping\n\n"))
-						flusher.Flush()
-					}
-					lastWriteNs.Store(time.Now().UnixNano())
-					mu.Unlock()
-				}
+				_ = write(": ping\n\n")
 			}
 		}
 	}()
-
-	err := b.client.PostStream(ctx, upstreamReq, func(line string) error {
-		delta := ParseSSELine(line)
-		if delta == nil {
-			return nil
+	defer func() { close(stop); <-done }()
+	completed := false
+	finished := false
+	err := ReadStream(resp, func(line string) error {
+		chunk, isDone, err := parseEvent(line)
+		if err != nil {
+			return err
 		}
-		if delta.IsDone {
-			return nil
+		if isDone {
+			if !finished {
+				return fmt.Errorf("WorkBuddy CN stream has no terminal choice")
+			}
+			completed = true
+			if err := write("data: [DONE]\n\n"); err != nil {
+				return err
+			}
+			return errDone
 		}
-
-		if delta.Content != "" || delta.ReasoningContent != "" || delta.FinishReason != "" {
-			chunk := MakeOpenAIChunk(reqID, created, model, delta.Content, delta.ReasoningContent, delta.FinishReason)
-			writeData(append(chunk, []byte("\n\n")...))
+		choices, _ := chunk["choices"].([]interface{})
+		for _, raw := range choices {
+			choice, _ := raw.(map[string]interface{})
+			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
+				if reason == "error" {
+					return fmt.Errorf("WorkBuddy CN reported finish_reason: error")
+				}
+				finished = true
+			}
 		}
-		return nil
+		return write(line + "\n\n")
 	})
-
-	if err != nil {
-		log.Printf("[workbuddy] stream error: %v", err)
-		errChunk := MakeOpenAIChunk(reqID, created, model, "", "", "error")
-		writeData(append(errChunk, []byte("\n\n")...))
-		writeData([]byte("data: [DONE]\n\n"))
-		return err
+	if errors.Is(err, errDone) {
+		return nil
 	}
-
-	// Terminal chunks
-	doneChunk := MakeOpenAIChunk(reqID, created, model, "", "", "stop")
-	writeData(append(doneChunk, []byte("\n\n")...))
-	writeData([]byte("data: [DONE]\n\n"))
+	if err == nil && !completed {
+		err = fmt.Errorf("WorkBuddy CN stream ended before [DONE]")
+	}
+	if err != nil {
+		payload, _ := json.Marshal(map[string]interface{}{"error": map[string]interface{}{"type": "upstream_error", "message": err.Error()}})
+		_ = write("data: " + string(payload) + "\n\ndata: [DONE]\n\n")
+		return &ReportedError{err}
+	}
 	return nil
 }
 
-func (b *Bridge) handleSync(ctx context.Context, w http.ResponseWriter, upstreamReq *UpstreamChatRequest, reqID string, created int64, model string) error {
-	var fullContent strings.Builder
-	var fullReasoning strings.Builder
-	var promptTokens, completionTokens, totalTokens int
+type aggregatedChoice struct {
+	Index        int                    `json:"index"`
+	Message      map[string]interface{} `json:"message"`
+	FinishReason interface{}            `json:"finish_reason"`
+	tools        map[int]map[string]interface{}
+}
 
-	err := b.client.PostStream(ctx, upstreamReq, func(line string) error {
-		delta := ParseSSELine(line)
-		if delta == nil || delta.IsDone {
-			return nil
+func (b *Bridge) handleSync(w http.ResponseWriter, resp *http.Response, model string) error {
+	result := map[string]interface{}{"id": NewRequestID(), "object": "chat.completion", "created": time.Now().Unix(), "model": model}
+	choices := map[int]*aggregatedChoice{}
+	completed := false
+	err := ReadStream(resp, func(line string) error {
+		chunk, done, err := parseEvent(line)
+		if err != nil {
+			return err
 		}
-		if delta.Content != "" {
-			fullContent.WriteString(delta.Content)
+		if done {
+			completed = true
+			return errDone
 		}
-		if delta.ReasoningContent != "" {
-			fullReasoning.WriteString(delta.ReasoningContent)
+		for _, k := range []string{"id", "created", "model", "usage", "system_fingerprint"} {
+			if v, ok := chunk[k]; ok && v != nil {
+				result[k] = v
+			}
 		}
-		if delta.TotalTokens > 0 {
-			promptTokens = delta.PromptTokens
-			completionTokens = delta.CompletionTokens
-			totalTokens = delta.TotalTokens
+		raw, _ := chunk["choices"].([]interface{})
+		for _, v := range raw {
+			c, ok := v.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid WorkBuddy choice")
+			}
+			index := number(c["index"])
+			out := choices[index]
+			if out == nil {
+				out = &aggregatedChoice{Index: index, Message: map[string]interface{}{"role": "assistant", "content": nil}, tools: map[int]map[string]interface{}{}}
+				choices[index] = out
+			}
+			if fr, ok := c["finish_reason"].(string); ok && fr != "" {
+				if fr == "error" {
+					return fmt.Errorf("WorkBuddy CN reported finish_reason: error")
+				}
+				out.FinishReason = fr
+			}
+			delta, _ := c["delta"].(map[string]interface{})
+			for _, key := range []string{"content", "reasoning_content", "refusal"} {
+				if part, ok := delta[key].(string); ok {
+					old, _ := out.Message[key].(string)
+					out.Message[key] = old + part
+				}
+			}
+			calls, _ := delta["tool_calls"].([]interface{})
+			for _, rawCall := range calls {
+				call, ok := rawCall.(map[string]interface{})
+				if !ok {
+					return fmt.Errorf("invalid WorkBuddy tool call")
+				}
+				i := number(call["index"])
+				tool := out.tools[i]
+				if tool == nil {
+					tool = map[string]interface{}{"function": map[string]interface{}{"name": "", "arguments": ""}}
+					out.tools[i] = tool
+				}
+				for _, key := range []string{"id", "type"} {
+					if value, ok := call[key]; ok {
+						tool[key] = value
+					}
+				}
+				f, _ := call["function"].(map[string]interface{})
+				target := tool["function"].(map[string]interface{})
+				for _, key := range []string{"name", "arguments"} {
+					if value, ok := f[key].(string); ok {
+						old, _ := target[key].(string)
+						target[key] = old + value
+					}
+				}
+			}
 		}
 		return nil
 	})
-
-	if err != nil {
+	if err != nil && !errors.Is(err, errDone) {
 		return err
 	}
-
-	resp := map[string]interface{}{
-		"id":      reqID,
-		"object":  "chat.completion",
-		"created": created,
-		"model":   model,
-		"choices": []interface{}{
-			map[string]interface{}{
-				"index": 0,
-				"message": map[string]interface{}{
-					"role":              "assistant",
-					"content":           fullContent.String(),
-					"reasoning_content": fullReasoning.String(),
-				},
-				"finish_reason": "stop",
-			},
-		},
-		"usage": map[string]interface{}{
-			"prompt_tokens":     promptTokens,
-			"completion_tokens": completionTokens,
-			"total_tokens":      totalTokens,
-		},
+	if !completed {
+		return fmt.Errorf("WorkBuddy CN stream ended before [DONE]")
 	}
-
+	if len(choices) == 0 {
+		return fmt.Errorf("WorkBuddy CN returned no choices")
+	}
+	indices := []int{}
+	for i := range choices {
+		indices = append(indices, i)
+	}
+	sort.Ints(indices)
+	list := []*aggregatedChoice{}
+	for _, i := range indices {
+		c := choices[i]
+		if c.FinishReason == nil {
+			return fmt.Errorf("WorkBuddy CN choice has no finish_reason")
+		}
+		if len(c.tools) > 0 {
+			keys := []int{}
+			for k := range c.tools {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			calls := []map[string]interface{}{}
+			for _, k := range keys {
+				calls = append(calls, c.tools[k])
+			}
+			c.Message["tool_calls"] = calls
+		}
+		list = append(list, c)
+	}
+	result["choices"] = list
 	w.Header().Set("Content-Type", "application/json")
-	return json.NewEncoder(w).Encode(resp)
+	return json.NewEncoder(w).Encode(result)
 }
+func number(v interface{}) int { n, _ := v.(float64); return int(n) }

@@ -1,0 +1,130 @@
+{
+  "checked_at": "2026-10-26 Asia/Taipei",
+  "method": "static installed application inspection; no account credentials read or upstream requests sent",
+  "application_root": "/Applications/TRAE SOLO CN.app/Contents/Resources/app",
+  "app_version": "0.1.66",
+  "vscode_version": "1.107.1",
+  "build_date": "2026-09-15T06:58:12.417Z",
+  "commit": "6d9ed14f693545a76d84c8e25a6cdb67fa9a9a4d",
+  "files": [
+    {
+      "path": "product.json",
+      "sha256": "3eddcd31a708c57b4868bfc9f639ea9daf135c7ae4b8ab96d1698e8bd205b741",
+      "size": 90050,
+      "markers": [
+        {
+          "text": "https://api.trae.com.cn",
+          "byte_offset": 39146
+        },
+        {
+          "text": "https://trae-api-cn.mchost.guru",
+          "byte_offset": 40886
+        },
+        {
+          "text": "ono9krqynydwx5",
+          "byte_offset": 54915
+        },
+        {
+          "text": "en1oxy7wnw8j9n",
+          "byte_offset": 55112
+        }
+      ]
+    },
+    {
+      "path": "out/main.js",
+      "sha256": "2af5a3c8b0e2e1439a4466dd72f3b2dcaf0be92b906abe4bce97c9a9c216b0c6",
+      "size": 2855601,
+      "markers": [
+        {
+          "text": "Cloud-IDE-JWT",
+          "byte_offset": 843443
+        },
+        {
+          "text": "/api/v2/GetUserToken",
+          "byte_offset": 1484530
+        },
+        {
+          "text": "TokenExpireAt",
+          "byte_offset": 1281584
+        }
+      ]
+    },
+    {
+      "path": "out/vs/workbench/workbench.desktop.main.solo-lite.js",
+      "sha256": "3cbfbc6ab193bf696602fecf89dc605ce061ce8f364e05d890ed162e721e9bfe",
+      "size": 15632389,
+      "markers": [
+        {
+          "text": "/cloudide/api/v3/trae/oauth/ExchangeToken",
+          "byte_offset": 15291603
+        },
+        {
+          "text": "RefreshToken",
+          "byte_offset": 4666968
+        },
+        {
+          "text": "ClientSecret",
+          "byte_offset": 15291752
+        }
+      ]
+    },
+    {
+      "path": "modules/ai-agent/libharness.dylib",
+      "sha256": "47abddc29786e17b1290ebff6384dcacbbf6efc1c4ddbf0bc9fb55a29f74fa43",
+      "size": 167656288,
+      "markers": [
+        {
+          "text": "api/ide/v1/get_model_list",
+          "byte_offset": 138958877
+        },
+        {
+          "text": "api/ide/v2/llm_raw_chat",
+          "byte_offset": 138958962
+        },
+        {
+          "text": "api/ide/v1/llm_raw_chat",
+          "byte_offset": 138959004
+        },
+        {
+          "text": "encrypted_model_params",
+          "byte_offset": 119113391
+        },
+        {
+          "text": "raw_chat_function",
+          "byte_offset": 119113448
+        },
+        {
+          "text": "X-Request-Pin",
+          "byte_offset": 119248640
+        },
+        {
+          "text": "X-Requested-At",
+          "byte_offset": 119248653
+        },
+        {
+          "text": "solo_work_lite",
+          "byte_offset": 119042388
+        }
+      ]
+    },
+    {
+      "path": "modules/ai-agent/libai_agent.dylib",
+      "sha256": "4d30ba36badf646e2857d4de133f2e3000a1563641da178b3ec3ddc78c19e2a4",
+      "size": 199291296,
+      "markers": [
+        {
+          "text": "llm_raw_chat_custom_model",
+          "byte_offset": 108133162
+        },
+        {
+          "text": "pass_back_reasoning",
+          "byte_offset": 108133262
+        },
+        {
+          "text": "config_name",
+          "byte_offset": 108133219
+        }
+      ]
+    }
+  ]
+}

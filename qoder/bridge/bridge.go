@@ -18,11 +18,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"qoder2api/auth"
-	"qoder2api/models"
-	"qoder2api/requestopts"
-	"qoder2api/stats"
-	"qoder2api/transform"
+	"worker-cn-2api/qoder/auth"
+	"worker-cn-2api/qoder/models"
+	"worker-cn-2api/qoder/transform"
+	"worker-cn-2api/requestopts"
+	"worker-cn-2api/stats"
 
 	"github.com/google/uuid"
 )
@@ -631,6 +631,9 @@ func (b *OpenAiBridge) HandleChat(ctx context.Context, w http.ResponseWriter, re
 	}
 
 	log.Printf("[bridge] chat req: prompt_len=%d model=%s", len(prompt), openaiModel)
+	if responseModel, ok := reqBody["_gateway_response_model"].(string); ok && responseModel != "" {
+		openaiModel = responseModel
+	}
 
 	url := auth.ChatURL(b.Region)
 	extraHeaders := map[string]string{

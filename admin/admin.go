@@ -1,5 +1,5 @@
 // Package admin provides WebUI management for the API bridge:
-// PAT configuration, API key CRUD, model listing, and password-protected access.
+// WorkBuddy CN token configuration, API key CRUD, model listing, and password-protected access.
 package admin
 
 import (
@@ -13,14 +13,16 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"qoder2api/auth"
-	"qoder2api/models"
-	"qoder2api/stats"
-	"qoder2api/store"
-	"qoder2api/workbuddy"
+	"worker-cn-2api/auth"
+	"worker-cn-2api/qoder"
+	"worker-cn-2api/stats"
+	"worker-cn-2api/store"
+	"worker-cn-2api/trae"
+	"worker-cn-2api/workbuddy"
 )
 
 const sessionDuration = 24 * time.Hour
@@ -30,13 +32,14 @@ const adminMaxBody = 1 << 16 // 64 KiB
 
 // Admin manages the web UI and admin API endpoints.
 type Admin struct {
-	store        *store.Store
-	modelFetcher ModelFetcher
-	stats        *stats.Recorder
-	wbBridge     *workbuddy.Bridge
-	sessions     map[string]time.Time
-	sessionMu    sync.Mutex
-	limiter      *loginLimiter
+	store         *store.Store
+	stats         *stats.Recorder
+	wbBridge      *workbuddy.Bridge
+	traeBridge    *trae.Bridge
+	qoderProvider *qoder.Provider
+	sessions      map[string]time.Time
+	sessionMu     sync.Mutex
+	limiter       *loginLimiter
 }
 
 // SetWorkBuddyBridge attaches the WorkBuddy bridge for hot updates.
@@ -44,17 +47,16 @@ func (a *Admin) SetWorkBuddyBridge(wb *workbuddy.Bridge) {
 	a.wbBridge = wb
 }
 
-// ModelFetcher returns the current model catalog (dynamic or fallback).
-type ModelFetcher func(ctx context.Context) []string
+func (a *Admin) SetTraeBridge(tb *trae.Bridge)       { a.traeBridge = tb }
+func (a *Admin) SetQoderProvider(qb *qoder.Provider) { a.qoderProvider = qb }
 
 // New creates an Admin instance. rec may be nil.
-func New(s *store.Store, mf ModelFetcher, rec *stats.Recorder) *Admin {
+func New(s *store.Store, rec *stats.Recorder) *Admin {
 	return &Admin{
-		store:        s,
-		modelFetcher: mf,
-		stats:        rec,
-		sessions:     make(map[string]time.Time),
-		limiter:      newLoginLimiter(),
+		store:    s,
+		stats:    rec,
+		sessions: make(map[string]time.Time),
+		limiter:  newLoginLimiter(),
 	}
 }
 
@@ -71,8 +73,12 @@ func (a *Admin) RegisterRoutes(mux *http.ServeMux) {
 
 	// Protected API endpoints (require auth)
 	mux.HandleFunc("/admin/api/keys", a.requireAuth(a.handleKeys))
-	mux.HandleFunc("/admin/api/pat", a.requireAuth(a.handlePAT))
 	mux.HandleFunc("/admin/api/workbuddy", a.requireAuth(a.handleWorkBuddy))
+	mux.HandleFunc("/admin/api/trae", a.requireAuth(a.handleTrae))
+	mux.HandleFunc("/admin/api/qoder", a.requireAuth(a.handleQoder))
+	mux.HandleFunc("/admin/api/pat", a.requireAuth(a.handleQoder))
+	mux.HandleFunc("/admin/api/trae/test", a.requireAuth(a.handleTraeTest))
+	mux.HandleFunc("/admin/api/trae/accounts", a.requireAuth(a.handleTraeAccounts))
 	mux.HandleFunc("/admin/api/models", a.requireAuth(a.handleModels))
 	mux.HandleFunc("/admin/api/stats", a.requireAuth(a.handleStats))
 	mux.HandleFunc("/admin/api/config", a.requireAuth(a.handleConfig))
@@ -128,7 +134,7 @@ func (a *Admin) removeSession(token string) {
 }
 
 func (a *Admin) getPassword() string {
-	if env := os.Getenv("QODER_ADMIN_PASSWORD"); env != "" {
+	if env := os.Getenv("WORKER_ADMIN_PASSWORD"); env != "" {
 		return env
 	}
 	return a.store.GetPassword()
@@ -349,8 +355,8 @@ func (a *Admin) handlePassword(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 400, "请求格式错误")
 		return
 	}
-	if os.Getenv("QODER_ADMIN_PASSWORD") != "" {
-		writeJSONError(w, 400, "密码由环境变量 QODER_ADMIN_PASSWORD 管理，无法在面板中修改")
+	if os.Getenv("WORKER_ADMIN_PASSWORD") != "" {
+		writeJSONError(w, 400, "密码由环境变量 WORKER_ADMIN_PASSWORD 管理，无法在面板中修改")
 		return
 	}
 	if !passwordsEqual(body.CurrentPassword, a.getPassword()) {
@@ -431,10 +437,10 @@ func (a *Admin) handleKeys(w http.ResponseWriter, r *http.Request) {
 
 // timeoutEnvManaged reports whether stream timeouts are pinned by env vars,
 // in which case the panel must not override them (same policy as
-// QODER_ADMIN_PASSWORD for password changes).
+// WORKER_ADMIN_PASSWORD for password changes).
 func timeoutEnvManaged() bool {
-	return os.Getenv("QODER_CHAT_TIMEOUT_SECONDS") != "" ||
-		os.Getenv("QODER_IDLE_TIMEOUT_SECONDS") != ""
+	return os.Getenv("WORKER_CHAT_TIMEOUT_SECONDS") != "" ||
+		os.Getenv("WORKER_IDLE_TIMEOUT_SECONDS") != ""
 }
 
 func (a *Admin) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -475,7 +481,7 @@ func (a *Admin) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// saving anything so a bad value cannot leave a partial update.
 		wantsTimeouts := body.ChatTimeoutSeconds != 0 || body.IdleTimeoutSeconds != 0
 		if wantsTimeouts && timeoutEnvManaged() {
-			writeJSONError(w, 400, "超时由环境变量 QODER_CHAT_TIMEOUT_SECONDS / QODER_IDLE_TIMEOUT_SECONDS 管理，无法在面板中修改")
+			writeJSONError(w, 400, "超时由环境变量 WORKER_CHAT_TIMEOUT_SECONDS / WORKER_IDLE_TIMEOUT_SECONDS 管理，无法在面板中修改")
 			return
 		}
 		if body.ChatTimeoutSeconds != 0 {
@@ -528,33 +534,6 @@ func (a *Admin) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- PAT endpoint ---
-
-func (a *Admin) handlePAT(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		// Only the masked form is exposed; the plaintext PAT never leaves
-		// the server. The UI edits it as a whole new value, never in place.
-		masked := maskPAT(a.store.GetPAT())
-		writeJSON(w, 200, map[string]string{"pat_masked": masked})
-	case http.MethodPost:
-		var body struct {
-			PAT string `json:"pat"`
-		}
-		if err := readJSON(w, r, &body); err != nil {
-			writeJSONError(w, 400, "请求格式错误")
-			return
-		}
-		if err := a.store.SetPAT(body.PAT); err != nil {
-			writeJSONError(w, 500, err.Error())
-			return
-		}
-		writeJSON(w, 200, map[string]string{"status": "ok"})
-	default:
-		writeJSONError(w, 405, "方法不允许")
-	}
-}
-
 // --- WorkBuddy endpoint ---
 
 func (a *Admin) handleWorkBuddy(w http.ResponseWriter, r *http.Request) {
@@ -576,7 +555,7 @@ func (a *Admin) handleWorkBuddy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{
 			"configured":   configured,
 			"token_masked": masked,
-			"models":       workbuddy.SupportedModelIDs(),
+			"provider":     "workbuddy-cn",
 		})
 	case http.MethodPost:
 		var body struct {
@@ -611,37 +590,184 @@ func (a *Admin) handleWorkBuddy(w http.ResponseWriter, r *http.Request) {
 
 // --- Models endpoint ---
 
+func (a *Admin) handleTrae(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		token, userID := a.store.GetTraeCredentials()
+		expiresAt, clientID := "", ""
+		if a.traeBridge != nil {
+			cfg := a.traeBridge.Config()
+			token, userID = cfg.Token, cfg.UserID
+			expiresAt, clientID = cfg.ExpiresAt, cfg.ClientID
+		}
+		masked := ""
+		if token != "" {
+			masked = "********"
+		}
+		status := trae.Diagnostics{Configured: token != ""}
+		if a.traeBridge != nil {
+			status = a.traeBridge.Status()
+		}
+		writeJSON(w, 200, map[string]any{"configured": token != "", "token_masked": masked, "user_id": userID, "provider": "trae-cn", "expires_at": expiresAt, "client_id": clientID, "status": status})
+	case http.MethodPost:
+		var body struct {
+			Token        string `json:"token"`
+			UserID       string `json:"user_id"`
+			RefreshToken string `json:"refresh_token"`
+			ExpiresAt    string `json:"expires_at"`
+			ClientID     string `json:"client_id"`
+		}
+		if err := readJSON(w, r, &body); err != nil {
+			writeJSONError(w, 400, "请求格式错误")
+			return
+		}
+		body.Token = strings.TrimSpace(body.Token)
+		body.UserID = strings.TrimSpace(body.UserID)
+		if body.Token == "" || strings.ContainsAny(body.Token, " \t\r\n") || strings.ContainsAny(body.UserID, "\r\n") {
+			writeJSONError(w, 400, "请输入有效的 Cloud-IDE-JWT 令牌（不带前缀）")
+			return
+		}
+		if body.ClientID != "" && body.ClientID != "ono9krqynydwx5" && body.ClientID != "en1oxy7wnw8j9n" {
+			writeJSONError(w, 400, "请选择有效的中国区产品类型")
+			return
+		}
+		if body.ExpiresAt != "" {
+			if _, err := time.Parse(time.RFC3339Nano, body.ExpiresAt); err != nil {
+				writeJSONError(w, 400, "令牌过期时间需为 ISO 8601 格式")
+				return
+			}
+		}
+		if strings.ContainsAny(body.RefreshToken, " \t\r\n") {
+			writeJSONError(w, 400, "刷新令牌格式错误")
+			return
+		}
+		if body.ClientID == "" {
+			body.ClientID = "ono9krqynydwx5"
+		}
+		save := func() error {
+			return a.store.SetTraeSession(store.TraeSession{Token: body.Token, UserID: body.UserID, RefreshToken: body.RefreshToken, ExpiresAt: body.ExpiresAt, ClientID: body.ClientID})
+		}
+		var err error
+		if a.traeBridge != nil {
+			err = a.traeBridge.ReplaceSession(body.Token, body.UserID, body.RefreshToken, body.ExpiresAt, body.ClientID, save)
+		} else {
+			err = save()
+		}
+		if err != nil {
+			writeJSONError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	case http.MethodDelete:
+		save := func() error { return a.store.SetTraeCredentials("", "") }
+		var err error
+		if a.traeBridge != nil {
+			err = a.traeBridge.ReplaceSession("", "", "", "", "", save)
+		} else {
+			err = save()
+		}
+		if err != nil {
+			writeJSONError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	default:
+		writeJSONError(w, 405, "方法不允许")
+	}
+}
+
+func (a *Admin) handleTraeTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, 405, "方法不允许")
+		return
+	}
+	if a.traeBridge == nil {
+		writeJSONError(w, 503, "Trae 渠道未初始化")
+		return
+	}
+	var body struct {
+		Model string `json:"model"`
+	}
+	if err := readJSON(w, r, &body); err != nil {
+		writeJSONError(w, 400, "请求格式错误")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := a.traeBridge.Probe(ctx, strings.TrimPrefix(strings.TrimSpace(body.Model), "trae/"))
+	if err != nil {
+		status := a.traeBridge.Status()
+		message := status.LastTest.Error
+		if message == "" {
+			message = "测试期间账号已发生变化，请重试"
+		}
+		writeJSON(w, 502, map[string]any{"error": message, "status": status})
+		return
+	}
+	writeJSON(w, 200, result)
+}
+
 func (a *Admin) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, 405, "方法不允许")
 		return
 	}
 	type modelEntry struct {
-		Name     string `json:"name"`
-		Provider string `json:"provider"`
+		Name              string `json:"name"`
+		Provider          string `json:"provider"`
+		DisplayName       string `json:"display_name,omitempty"`
+		ContextWindow     int64  `json:"context_window,omitempty"`
+		MaxOutputTokens   int64  `json:"max_output_tokens,omitempty"`
+		SupportsTools     *bool  `json:"supports_tools,omitempty"`
+		SupportsReasoning *bool  `json:"supports_reasoning,omitempty"`
+		Channel           string `json:"channel,omitempty"`
 	}
 
-	var qoderModels []string
-	if a.modelFetcher != nil {
-		qoderModels = a.modelFetcher(r.Context())
+	entries := []modelEntry{}
+	ids := []string{}
+	providerErrors := map[string]string{}
+	if a.qoderProvider != nil && a.qoderProvider.Configured() {
+		catalog, err := a.qoderProvider.Models(r.Context())
+		if err != nil {
+			providerErrors["qoder-cn"] = err.Error()
+		} else {
+			for _, id := range catalog {
+				entries = append(entries, modelEntry{Name: "qoder/" + id, DisplayName: id, Provider: "qoder-cn"})
+				ids = append(ids, id)
+			}
+		}
 	}
-	if qoderModels == nil {
-		catalog := models.DefaultCatalog()
-		qoderModels = catalog.Keys()
+	if a.wbBridge != nil && a.wbBridge.Config().Token != "" {
+		initialToken := a.wbBridge.Config().Token
+		catalog, err := a.wbBridge.Models(r.Context())
+		if err != nil {
+			message := err.Error()
+			for _, token := range []string{initialToken, a.wbBridge.Config().Token} {
+				if token != "" {
+					message = strings.ReplaceAll(message, token, "[redacted]")
+				}
+			}
+			providerErrors["workbuddy-cn"] = message
+		} else {
+			for _, m := range catalog {
+				entries = append(entries, modelEntry{Name: "workbuddy/" + m.ID, Provider: "workbuddy-cn", DisplayName: m.Name, ContextWindow: int64(m.MaxInputTokens), MaxOutputTokens: int64(m.MaxOutputTokens), SupportsTools: m.SupportsToolCall})
+				ids = append(ids, m.ID)
+			}
+		}
 	}
-
-	var allEntries []modelEntry
-	for _, m := range qoderModels {
-		allEntries = append(allEntries, modelEntry{Name: m, Provider: "qoder"})
+	if a.traeBridge != nil && a.traeBridge.Config().Token != "" {
+		catalog, err := a.traeBridge.Models(r.Context())
+		if err != nil {
+			providerErrors["trae-cn"] = a.traeBridge.Status().LastCatalog.Error
+		} else {
+			for _, m := range catalog {
+				id := "trae/" + m.ID
+				entries = append(entries, modelEntry{Name: id, Provider: "trae-cn", DisplayName: m.Name, ContextWindow: m.ContextWindow, Channel: trae.Function})
+				ids = append(ids, id)
+			}
+		}
 	}
-	for _, m := range workbuddy.SupportedModelIDs() {
-		allEntries = append(allEntries, modelEntry{Name: m, Provider: "workbuddy"})
-	}
-
-	writeJSON(w, 200, map[string]interface{}{
-		"models":  allEntries,
-		"raw_ids": qoderModels,
-	})
+	writeJSON(w, 200, map[string]interface{}{"models": entries, "raw_ids": ids, "provider_errors": providerErrors})
 }
 
 // --- Stats endpoint ---
@@ -661,21 +787,14 @@ func (a *Admin) handleStats(w http.ResponseWriter, r *http.Request) {
 // --- WebUI ---
 
 func (a *Admin) serveIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/admin" && r.URL.Path != "/admin/" {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 	w.WriteHeader(200)
 	w.Write([]byte(indexHTML))
-}
-
-// maskPAT returns a masked version of the PAT for display.
-func maskPAT(pat string) string {
-	if len(pat) <= 8 {
-		if pat == "" {
-			return ""
-		}
-		return "****"
-	}
-	return pat[:4] + "****" + pat[len(pat)-4:]
 }

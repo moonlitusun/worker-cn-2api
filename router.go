@@ -3,237 +3,237 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
-	"qoder2api/auth"
-	"qoder2api/bridge"
-	"qoder2api/models"
-	"qoder2api/requestopts"
-	"qoder2api/stats"
-	"qoder2api/store"
-	"qoder2api/transform"
-	"qoder2api/workbuddy"
+	"worker-cn-2api/qoder"
+	"worker-cn-2api/requestopts"
+	"worker-cn-2api/stats"
+	"worker-cn-2api/store"
+	"worker-cn-2api/trae"
+	"worker-cn-2api/workbuddy"
 )
 
 func extractBearerToken(r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token := strings.TrimSpace(authHeader[7:])
-		if token != "" {
-			return token
-		}
-	}
-	return ""
+	return strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 }
-
-func writeJSONError(w http.ResponseWriter, statusCode int, errType, message string) {
+func writeJSONError(w http.ResponseWriter, status int, kind, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	resp := map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": message,
-			"type":    errType,
-		},
-	}
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(resp)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": map[string]interface{}{"type": kind, "message": message}})
 }
-
-// makeUnifiedChatHandler creates the chat completions handler that dynamically routes
-// requests to WorkBuddy CN or Qoder CN based on the requested model name.
-func makeUnifiedChatHandler(st *store.Store, qoderProvider *bridgeProvider, wbBridge *workbuddy.Bridge, rec *stats.Recorder) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := extractBearerToken(r)
-		if token == "" {
-			writeJSONError(w, 401, "invalid_request_error", "Missing Authorization: Bearer <key>")
+func writeWorkBuddyError(w http.ResponseWriter, err error) {
+	var qe *qoder.Error
+	if errors.As(err, &qe) {
+		if qe.Reported {
 			return
 		}
-		if !st.ValidateKey(token) {
+		if qe.Status == 429 {
+			w.Header().Set("Retry-After", "3")
+		}
+		writeJSONError(w, qe.Status, "qoder_error", qe.Message)
+		return
+	}
+	var traeReported *trae.ReportedError
+	if errors.As(err, &traeReported) {
+		return
+	}
+	var traeErr *trae.Error
+	if errors.As(err, &traeErr) {
+		if traeErr.Status == 429 {
+			w.Header().Set("Retry-After", "3")
+		}
+		writeJSONError(w, traeErr.Status, "trae_error", traeErr.Error())
+		return
+	}
+	var reported *workbuddy.ReportedError
+	if errors.As(err, &reported) {
+		return
+	}
+	status := http.StatusBadGateway
+	var request *workbuddy.RequestError
+	if errors.As(err, &request) {
+		writeJSONError(w, 400, "invalid_request_error", err.Error())
+		return
+	}
+	var upstream *workbuddy.UpstreamError
+	if errors.As(err, &upstream) {
+		status = upstream.Status
+		if status < 400 || status > 599 {
+			status = 502
+		}
+	}
+	var queue *workbuddy.QueueTimeoutError
+	if errors.As(err, &queue) {
+		status = 429
+		w.Header().Set("Retry-After", "3")
+	}
+	writeJSONError(w, status, "upstream_error", err.Error())
+}
+func makeChatHandler(st *store.Store, b *workbuddy.Bridge, rec *stats.Recorder, providers ...any) http.HandlerFunc {
+	tb, qb := channelProviders(providers)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeJSONError(w, 405, "invalid_request_error", "method not allowed")
+			return
+		}
+		token := extractBearerToken(r)
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || token == "" || !st.ValidateKey(token) {
 			writeJSONError(w, 401, "invalid_request_error", "Invalid API key")
 			return
 		}
-
-		// Cap body size (10 MiB)
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-
-		var reqBody map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-			writeJSONError(w, 400, "invalid_request_error", "Invalid JSON body: "+err.Error())
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body == nil {
+			writeJSONError(w, 400, "invalid_request_error", "Invalid JSON body")
 			return
 		}
-
-		if _, err := requestopts.ReasoningEnabled(reqBody); err != nil {
-			writeJSONError(w, 400, "invalid_request_error", err.Error())
-			return
+		model, _ := body["model"].(string)
+		isTrae := strings.HasPrefix(strings.TrimSpace(model), "trae/")
+		isQoder := strings.HasPrefix(strings.TrimSpace(model), "qoder/")
+		if !isQoder && !isTrae && !strings.Contains(model, "/") && qb != nil && qb.Configured() {
+			if names, err := qb.Models(r.Context()); err == nil {
+				for _, name := range names {
+					if strings.TrimSpace(model) == name {
+						isQoder = true
+						break
+					}
+				}
+			}
 		}
-
-		modelParam, _ := reqBody["model"].(string)
-		modelNorm := strings.TrimSpace(modelParam)
-
-		// Dispatcher: Route to WorkBuddy if model belongs to WorkBuddy catalog
-		if workbuddy.IsWorkbuddyModel(modelNorm) {
-			if wbBridge == nil || wbBridge.Config().Token == "" {
-				writeJSONError(w, 503, "workbuddy_error", "WorkBuddy backend is not configured (missing auth token)")
+		if !isTrae {
+			if _, err := requestopts.ReasoningEnabled(body); err != nil {
+				writeJSONError(w, 400, "invalid_request_error", err.Error())
 				return
 			}
-			err := wbBridge.HandleChat(r.Context(), w, reqBody)
+		}
+		if strings.TrimSpace(model) == "" || (!isTrae && !isQoder && strings.Contains(strings.TrimPrefix(strings.TrimSpace(model), "workbuddy/"), "/")) {
+			writeJSONError(w, 400, "invalid_request_error", "model must be a WorkBuddy CN ID from /v1/models")
+			return
+		}
+		messages, ok := body["messages"].([]interface{})
+		if !ok || len(messages) == 0 {
+			writeJSONError(w, 400, "invalid_request_error", "messages must be a non-empty array")
+			return
+		}
+		if _, ok := body["stream"]; ok {
+			if _, ok := body["stream"].(bool); !ok {
+				writeJSONError(w, 400, "invalid_request_error", "stream must be a boolean")
+				return
+			}
+		}
+		if isTrae {
+			if tb == nil {
+				writeJSONError(w, 503, "trae_error", "Trae CN is not configured")
+				return
+			}
+			err := tb.HandleChat(r.Context(), w, body)
+			if rec != nil {
+				rec.Record(model, err == nil)
+			}
 			if err != nil {
-				if rec != nil {
-					rec.Record("workbuddy:"+modelNorm, false)
-				}
-				log.Printf("[router] WorkBuddy chat error: %v", err)
-			} else {
-				if rec != nil {
-					rec.Record("workbuddy:"+modelNorm, true)
-				}
+				writeWorkBuddyError(w, err)
 			}
 			return
 		}
-
-		// Otherwise dispatch to Qoder
-		qb := qoderProvider.currentBridge()
-		if qb == nil {
-			writeJSONError(w, 503, "qoder_error", "No Qoder PAT configured")
+		if isQoder {
+			if qb == nil {
+				writeJSONError(w, 503, "qoder_error", "Qoder CN is not configured")
+				return
+			}
+			err := qb.HandleChat(r.Context(), w, body, rec)
+			if rec != nil {
+				rec.Record(model, err == nil)
+			}
+			if err != nil {
+				writeWorkBuddyError(w, err)
+			}
 			return
 		}
-
-		var usageSink bridge.UsageSink
+		if b == nil || b.Config().Token == "" {
+			writeJSONError(w, 503, "workbuddy_error", "WorkBuddy CN auth token is not configured")
+			return
+		}
+		err := b.HandleChat(r.Context(), w, body)
 		if rec != nil {
-			usageSink = func(u *transform.Usage) {
-				rec.RecordUsage(&stats.Usage{
-					PromptTokens:     u.PromptTokens,
-					CompletionTokens: u.CompletionTokens,
-					CachedTokens:     u.CachedPromptTokens(),
-					Credits:          u.Credits,
-				})
-			}
+			rec.Record(model, err == nil)
 		}
-
-		err := qb.HandleChat(r.Context(), w, reqBody, usageSink)
 		if err != nil {
-			clientGone := errors.Is(err, r.Context().Err())
-			var repErr *bridge.StreamReportedError
-			if errors.As(err, &repErr) {
-				if !clientGone && rec != nil {
-					rec.Record(modelNorm, false)
-				}
-				return
-			}
-			var qErr *bridge.QueueTimeoutError
-			if errors.As(err, &qErr) {
-				w.Header().Set("Retry-After", "3")
-				writeJSONError(w, 429, "rate_limit_error", "upstream busy: queue timeout")
-				if rec != nil {
-					rec.Record(modelNorm, false)
-				}
-				return
-			}
-			var busyErr *auth.BusyError
-			if errors.As(err, &busyErr) {
-				if busyErr.RetryAfter > 0 {
-					w.Header().Set("Retry-After", strconv.Itoa(int(busyErr.RetryAfter.Seconds()+1)))
-				}
-				writeJSONError(w, 429, "rate_limit_error", "upstream busy: "+busyErr.Message)
-				if rec != nil {
-					rec.Record(modelNorm, false)
-				}
-				return
-			}
-			var valErr *models.UnsupportedModelError
-			if errors.As(err, &valErr) {
-				writeJSONError(w, 400, "invalid_request_error", valErr.Error())
-				if rec != nil {
-					rec.Record(modelNorm, false)
-				}
-				return
-			}
-			writeJSONError(w, 500, "upstream_error", err.Error())
-			if !clientGone && rec != nil {
-				rec.Record(modelNorm, false)
-			}
-			return
-		}
-		if rec != nil {
-			rec.Record(modelNorm, true)
+			writeWorkBuddyError(w, err)
 		}
 	}
 }
-
-// makeUnifiedModelsHandler returns an aggregated OpenAI-compatible model list
-// containing models from both Qoder CN and WorkBuddy CN.
-func makeUnifiedModelsHandler(st *store.Store, qoderProvider *bridgeProvider, wbBridge *workbuddy.Bridge) http.HandlerFunc {
+func makeModelsHandler(st *store.Store, b *workbuddy.Bridge, providers ...any) http.HandlerFunc {
+	tb, qb := channelProviders(providers)
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := extractBearerToken(r)
-		if token != "" && !st.ValidateKey(token) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeJSONError(w, 405, "invalid_request_error", "method not allowed")
+			return
+		}
+		if !st.ValidateKey(extractBearerToken(r)) || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			writeJSONError(w, 401, "invalid_request_error", "Invalid API key")
 			return
 		}
-
-		type openAIModel struct {
-			ID      string `json:"id"`
-			Object  string `json:"object"`
-			Created int64  `json:"created"`
-			OwnedBy string `json:"owned_by"`
+		hasWB := b != nil && b.Config().Token != ""
+		hasTrae := tb != nil && tb.Config().Token != ""
+		hasQoder := qb != nil && qb.Configured()
+		if !hasWB && !hasTrae && !hasQoder {
+			writeJSONError(w, 503, "workbuddy_error", "WorkBuddy CN auth token is not configured")
+			return
 		}
-
-		modelMap := make(map[string]openAIModel)
-		now := time.Now().Unix()
-
-		// 1. Collect Qoder models
-		qb := qoderProvider.currentBridge()
-		var qoderCatalog *models.ModelCatalog
-		if qb != nil {
-			qoderCatalog = qb.GetCatalog(r.Context())
-		} else {
-			qoderCatalog = models.DefaultCatalog()
+		list := []map[string]interface{}{}
+		if hasQoder {
+			models, err := qb.Models(r.Context())
+			if err != nil {
+				writeWorkBuddyError(w, err)
+				return
+			}
+			for _, id := range models {
+				list = append(list, map[string]any{"id": "qoder/" + id, "object": "model", "created": time.Now().Unix(), "owned_by": "qoder-cn"})
+			}
 		}
-		if qoderCatalog != nil {
-			for _, k := range qoderCatalog.Keys() {
-				modelMap[k] = openAIModel{
-					ID:      k,
-					Object:  "model",
-					Created: now,
-					OwnedBy: "qoder",
+		if hasWB {
+			models, err := b.Models(r.Context())
+			if err != nil {
+				writeWorkBuddyError(w, err)
+				return
+			}
+			for _, m := range models {
+				entry := map[string]interface{}{"id": "workbuddy/" + m.ID, "object": "model", "created": time.Now().Unix(), "owned_by": "workbuddy-cn", "context_window": m.MaxInputTokens, "max_output_tokens": m.MaxOutputTokens}
+				if m.SupportsToolCall != nil {
+					entry["supports_tool_calls"] = *m.SupportsToolCall
 				}
+				list = append(list, entry)
 			}
 		}
-
-		// 2. Collect WorkBuddy models
-		for _, mID := range workbuddy.SupportedModelIDs() {
-			modelMap[mID] = openAIModel{
-				ID:      mID,
-				Object:  "model",
-				Created: now,
-				OwnedBy: "workbuddy",
+		if hasTrae {
+			models, err := tb.Models(r.Context())
+			if err != nil {
+				writeWorkBuddyError(w, err)
+				return
 			}
-			// Also add prefixed version for disambiguation
-			prefixed := "workbuddy/" + mID
-			modelMap[prefixed] = openAIModel{
-				ID:      prefixed,
-				Object:  "model",
-				Created: now,
-				OwnedBy: "workbuddy",
+			for _, m := range models {
+				list = append(list, map[string]interface{}{"id": "trae/" + m.ID, "object": "model", "created": time.Now().Unix(), "owned_by": "trae-cn", "context_window": m.ContextWindow})
 			}
 		}
-
-		modelList := make([]openAIModel, 0, len(modelMap))
-		for _, m := range modelMap {
-			modelList = append(modelList, m)
-		}
-		sort.Slice(modelList, func(i, j int) bool {
-			return modelList[i].ID < modelList[j].ID
-		})
-
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"object": "list",
-			"data":   modelList,
-		})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"object": "list", "data": list})
 	}
+}
+
+func channelProviders(providers []any) (*trae.Bridge, *qoder.Provider) {
+	var tb *trae.Bridge
+	var qb *qoder.Provider
+	for _, p := range providers {
+		switch v := p.(type) {
+		case *trae.Bridge:
+			tb = v
+		case *qoder.Provider:
+			qb = v
+		}
+	}
+	return tb, qb
 }

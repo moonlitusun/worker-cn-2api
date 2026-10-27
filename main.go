@@ -1,4 +1,4 @@
-// qoder2api: OpenAI-compatible API bridge for QoderWork.
+// worker-cn-2api exposes WorkBuddy CN and Trae CN through an OpenAI-compatible API.
 package main
 
 import (
@@ -11,56 +11,16 @@ import (
 	"strconv"
 	"syscall"
 
-	"qoder2api/admin"
-	"qoder2api/auth"
-	"qoder2api/bridge"
-	"qoder2api/models"
-	"qoder2api/stats"
-	"qoder2api/store"
-	"qoder2api/workbuddy"
+	"worker-cn-2api/admin"
+	"worker-cn-2api/auth"
+	"worker-cn-2api/qoder"
+	"worker-cn-2api/stats"
+	"worker-cn-2api/store"
+	"worker-cn-2api/trae"
+	"worker-cn-2api/workbuddy"
 
-	"sync"
 	"time"
 )
-
-// bridgeProvider manages a single OpenAiBridge for the current PAT.
-// When the PAT changes (via admin UI), the bridge is recreated on next access.
-type bridgeProvider struct {
-	mu     sync.Mutex
-	bridge *bridge.OpenAiBridge
-	pat    string
-	store  *store.Store
-}
-
-func newBridgeProvider(st *store.Store) *bridgeProvider {
-	return &bridgeProvider{store: st}
-}
-
-// resolveBridge validates the API key and returns the bridge for the current PAT.
-// Returns nil if the key is invalid or no PAT is configured.
-func (p *bridgeProvider) resolveBridge(apiKey string) *bridge.OpenAiBridge {
-	if !p.store.ValidateKey(apiKey) {
-		return nil
-	}
-	return p.currentBridge()
-}
-
-// currentBridge returns the bridge for the current PAT, creating or recreating
-// the bridge when the PAT changes.
-func (p *bridgeProvider) currentBridge() *bridge.OpenAiBridge {
-	pat := p.store.GetPAT()
-	if pat == "" {
-		return nil
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.bridge == nil || p.pat != pat {
-		realPAT, region := auth.Resolve(pat)
-		p.bridge = bridge.NewOpenAiBridge(realPAT, region)
-		p.pat = pat
-	}
-	return p.bridge
-}
 
 func newWorkBuddyBridge(st *store.Store) *workbuddy.Bridge {
 	return workbuddy.NewBridge(workbuddy.ResolveConfig(st.GetWorkBuddyToken()))
@@ -68,9 +28,10 @@ func newWorkBuddyBridge(st *store.Store) *workbuddy.Bridge {
 
 // healthHandler serves an unauthenticated liveness/readiness probe. It is
 // deliberately cheap (no upstream calls, no session bootstrap): the body
-// carries readiness details (PAT configured, effective stream timeouts)
+// carries readiness details (WorkBuddy CN token configured, effective stream timeouts)
 // while the status stays 200 as long as the process is serving.
-func healthHandler(st *store.Store, wbBridge *workbuddy.Bridge) http.HandlerFunc {
+func healthHandler(st *store.Store, wbBridge *workbuddy.Bridge, providers ...any) http.HandlerFunc {
+	tb, qb := channelProviders(providers)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -78,6 +39,7 @@ func healthHandler(st *store.Store, wbBridge *workbuddy.Bridge) http.HandlerFunc
 			return
 		}
 		timeouts := auth.CurrentStreamTimeouts()
+		hasTrae := tb != nil && tb.Config().Token != ""
 		w.Header().Set("Content-Type", "application/json")
 		hasWB := false
 		if wbBridge != nil && wbBridge.Config().Token != "" {
@@ -85,24 +47,20 @@ func healthHandler(st *store.Store, wbBridge *workbuddy.Bridge) http.HandlerFunc
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":               "ok",
-			"has_pat":              st.GetPAT() != "",
 			"has_workbuddy":        hasWB,
+			"has_trae":             hasTrae,
+			"has_qoder":            qb != nil && qb.Configured(),
 			"chat_timeout_seconds": int(timeouts.Header.Seconds()),
 			"idle_timeout_seconds": int(timeouts.Idle.Seconds()),
 		})
 	}
 }
 
-func getEnv(workerKey, legacyKey string) string {
-	if v := os.Getenv(workerKey); v != "" {
-		return v
-	}
-	return os.Getenv(legacyKey)
-}
+func getEnv(key string) string { return os.Getenv(key) }
 
 func main() {
 	// Initialize store
-	dataPath := getEnv("WORKER_DATA_PATH", "QODER_DATA_PATH")
+	dataPath := getEnv("WORKER_DATA_PATH")
 	if dataPath == "" {
 		dataPath = "data.json"
 	}
@@ -112,12 +70,12 @@ func main() {
 	}
 
 	// Host/port: env vars override config file; config file overrides defaults
-	host := getEnv("WORKER_HOST", "QODER_HOST")
+	host := getEnv("WORKER_HOST")
 	if host == "" {
 		host = st.GetHost()
 	}
 	port := st.GetPort()
-	if envPort := getEnv("WORKER_PORT", "QODER_PORT"); envPort != "" {
+	if envPort := getEnv("WORKER_PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil {
 			port = p
 		} else {
@@ -129,7 +87,7 @@ func main() {
 	// config file overrides the built-in defaults (same precedence as
 	// host/port). Applied to new requests immediately.
 	chatTimeout := st.GetChatTimeoutSeconds()
-	if v := getEnv("WORKER_CHAT_TIMEOUT_SECONDS", "QODER_CHAT_TIMEOUT_SECONDS"); v != "" {
+	if v := getEnv("WORKER_CHAT_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= store.MaxChatTimeoutSeconds {
 			chatTimeout = n
 		} else {
@@ -137,7 +95,7 @@ func main() {
 		}
 	}
 	idleTimeout := st.GetIdleTimeoutSeconds()
-	if v := getEnv("WORKER_IDLE_TIMEOUT_SECONDS", "QODER_IDLE_TIMEOUT_SECONDS"); v != "" {
+	if v := getEnv("WORKER_IDLE_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= store.MaxIdleTimeoutSeconds {
 			idleTimeout = n
 		} else {
@@ -145,8 +103,6 @@ func main() {
 		}
 	}
 	auth.SetStreamTimeouts(time.Duration(chatTimeout)*time.Second, time.Duration(idleTimeout)*time.Second)
-
-	provider := newBridgeProvider(st)
 
 	// Request statistics recorder with periodic persistence (30s cadence).
 	// The loop also drains a stop channel so graceful shutdown can trigger a
@@ -173,33 +129,46 @@ func main() {
 		}
 	}()
 
-	// Model fetcher for admin UI
-	modelFetcher := func(ctx context.Context) []string {
-		b := provider.currentBridge()
-		if b == nil {
-			return models.DefaultCatalog().Keys()
-		}
-		catalog := b.GetCatalog(ctx)
-		return catalog.Keys()
-	}
-
 	// Initialize WorkBuddy bridge
 	wbBridge := newWorkBuddyBridge(st)
 	wbConfig := wbBridge.Config()
 	if wbConfig.Token != "" {
-		log.Printf("[workbuddy] backend ready (user=%s device=%s)", wbConfig.UserID, wbConfig.DeviceID)
+		log.Printf("[workbuddy] CN backend ready")
 	} else {
 		log.Printf("[workbuddy] backend standby (no auth token configured)")
 	}
 
 	// Initialize admin
-	adminInst := admin.New(st, modelFetcher, rec)
+	traeToken, traeUserID := st.GetTraeCredentials()
+	traeCfg := trae.ResolveConfig(traeToken, traeUserID)
+	if saved := st.GetTraeSession(); saved.Token != "" {
+		traeCfg.RefreshToken = saved.RefreshToken
+		traeCfg.ExpiresAt = saved.ExpiresAt
+		if saved.ClientID != "" {
+			traeCfg.ClientID = saved.ClientID
+		}
+	}
+	traeBridge := trae.NewBridge(traeCfg)
+	traeBridge.SetCredentialSaver(func(c trae.Config) error {
+		return st.SetTraeSession(store.TraeSession{Token: c.Token, UserID: c.UserID, RefreshToken: c.RefreshToken, ExpiresAt: c.ExpiresAt, ClientID: c.ClientID})
+	})
+	adminInst := admin.New(st, rec)
 	adminInst.SetWorkBuddyBridge(wbBridge)
+	adminInst.SetTraeBridge(traeBridge)
+	pat := st.GetQoderPAT()
+	if pat == "" {
+		pat = os.Getenv("WORKER_QODER_PAT")
+	}
+	if pat == "" {
+		pat = os.Getenv("QODER_PAT")
+	}
+	qoderProvider := qoder.NewProvider(pat)
+	adminInst.SetQoderProvider(qoderProvider)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/chat/completions", makeUnifiedChatHandler(st, provider, wbBridge, rec))
-	mux.HandleFunc("/v1/models", makeUnifiedModelsHandler(st, provider, wbBridge))
-	mux.HandleFunc("/health", healthHandler(st, wbBridge))
+	mux.HandleFunc("/v1/chat/completions", makeChatHandler(st, wbBridge, rec, traeBridge, qoderProvider))
+	mux.HandleFunc("/v1/models", makeModelsHandler(st, wbBridge, traeBridge, qoderProvider))
+	mux.HandleFunc("/health", healthHandler(st, wbBridge, traeBridge, qoderProvider))
 
 	// Root redirect to admin UI
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

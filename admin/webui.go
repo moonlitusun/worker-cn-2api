@@ -12,7 +12,7 @@ const indexHTML = `<!DOCTYPE html>
 <title>Worker-CN-2API 管理控制台</title>
 <script>
 try {
-  var t = localStorage.getItem('worker-cn-2api-theme') || localStorage.getItem('qoder2api-theme');
+  var t = localStorage.getItem('worker-cn-2api-theme');
   var dark = t === 'dark' || (t !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
 } catch (e) {}
@@ -746,6 +746,30 @@ input[readonly] {
   /* Prevent iOS Safari auto-zoom on focus (requires >=16px). */
   input[type="text"], input[type="number"], input[type="password"] { font-size: 16px; }
 }
+
+/* Provider diagnostics and model details */
+#traeStatusHint:empty { display:none; }
+.provider-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 20px; padding:16px; margin:12px 0; border-radius:var(--radius-sm); background:var(--surface-2); }
+.provider-meta div { min-width:0; }
+.provider-meta dt { color:var(--muted);font-size:12px;margin-bottom:4px; }
+.provider-meta dd { margin:0;font-size:13px;overflow-wrap:anywhere; }
+.provider-operation { padding:9px 0;border-bottom:1px solid var(--border);font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap; }
+.provider-operation:last-child { border-bottom:0; }
+.provider-operation.failed { color:var(--danger); }
+.provider-actions { display:flex;gap:8px;flex-wrap:wrap;margin:14px 0;align-items:center; }
+.provider-actions .btn { white-space:normal; }
+.provider-select, .field select { min-width:0;max-width:100%;padding:9px 12px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;font:inherit; }
+.field select { width:100%; }
+.provider-select { flex:1; }
+.card-head .badge { flex-shrink:0;white-space:nowrap; }
+.badge.warn { background:var(--warning-soft);color:var(--warning);border:1px solid var(--warning-border); }
+.model-card-content { min-width:0;flex:1; }
+.model-card-title { overflow-wrap:anywhere;font-size:13px; }
+.model-card-description { margin-top:8px;font-size:12px;color:var(--muted);line-height:1.7;overflow-wrap:anywhere; }
+.model-toolbar { display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px; }
+.model-toolbar input { flex:1;min-width:150px; }
+.model-item { align-items:flex-start; }
+@media(max-width:600px) { .provider-meta { grid-template-columns:1fr; } .provider-actions .provider-select { flex-basis:100%; } .model-grid { grid-template-columns:minmax(0,1fr); } .provider-actions .btn { flex:1; } }
 </style>
 </head>
 <body>
@@ -923,32 +947,15 @@ input[readonly] {
     <!-- Providers / Tokens -->
     <section id="page-token" class="page hidden">
       <div class="page-head">
-        <div class="page-title">渠道凭证 (Providers)</div>
-        <div class="page-desc">配置各平台后端访问凭据，保存后即刻热更新生效</div>
+        <div class="page-title">渠道凭证</div>
       </div>
 
-      <!-- Qoder 卡片 -->
       <div class="card">
-        <div class="card-head">
-          <div class="card-title">
-            阿里 Qoder (PAT 令牌)
-            <small>用于桥接通义千问后台模型（DeepSeek-Flash、Qwen3.8-Max、GLM-5.3、Kimi 等）</small>
-          </div>
-          <span id="qoderBadge" class="badge">检查中...</span>
-        </div>
+        <div class="card-head"><div class="card-title">Qoder CN</div><span id="qoderBadge" class="badge">检查中...</span></div>
         <div class="card-body">
-          <p class="hint">Qoder 个人访问令牌（Personal Access Token），格式通常为 pt-xxxxxx。保存后会话将在下一次请求时自动重建。</p>
-          <div class="row">
-            <label>当前令牌</label>
-            <div class="field"><input type="text" id="patDisplay" readonly></div>
-          </div>
-          <div class="row">
-            <label>新令牌</label>
-            <div class="field"><input type="text" id="patInput" placeholder="pt-..." autocomplete="off"></div>
-          </div>
-          <div class="btn-row right">
-            <button class="btn" type="button" onclick="savePAT()">保存 Qoder 令牌</button>
-          </div>
+          <div class="row"><label for="qoderDisplay">当前 PAT</label><div class="field"><input id="qoderDisplay" type="text" readonly placeholder="未配置"></div></div>
+          <div class="row"><label for="qoderInput">新 PAT</label><div class="field"><input id="qoderInput" type="password" autocomplete="off" placeholder="PAT"></div></div>
+          <div class="btn-row right"><button class="btn danger sm" type="button" onclick="clearQoder()">清空</button><button class="btn" type="button" onclick="saveQoder()">保存</button></div>
         </div>
       </div>
 
@@ -956,24 +963,69 @@ input[readonly] {
       <div class="card">
         <div class="card-head">
           <div class="card-title">
-            腾讯 WorkBuddy / CodeBuddy (授权 Token)
-            <small>用于桥接腾讯 Copilot 后台模型（deepseek-v3、deepseek-r1 深度思考、混元 hunyuan-code 等）</small>
+            腾讯 WorkBuddy 中国区 (授权 Token)
+            
           </div>
           <span id="wbBadge" class="badge">检查中...</span>
         </div>
         <div class="card-body">
-          <p class="hint">可在此处直接填入 Token，或配置环境变量 WORKER_WORKBUDDY_TOKEN。系统会自动基于 Token 计算确定性硬件指纹 (derive_id) 防范风控。</p>
           <div class="row">
             <label>当前令牌</label>
             <div class="field"><input type="text" id="wbDisplay" readonly placeholder="未配置"></div>
           </div>
           <div class="row">
             <label>新令牌</label>
-            <div class="field"><input type="text" id="wbInput" placeholder="填入 auth_token 或从 workbuddy-desktop.info 复制" autocomplete="off"></div>
+            <div class="field"><input type="text" id="wbInput" placeholder="填入 accessToken 或旧版 auth_token" autocomplete="off"></div>
           </div>
           <div class="btn-row right">
             <button class="btn danger sm" type="button" onclick="clearWorkBuddy()">清空</button>
             <button class="btn" type="button" onclick="saveWorkBuddy()">保存 WorkBuddy 令牌</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">字节 Trae 中国区</div>
+          <span id="traeBadge" class="badge">检查中...</span>
+        </div>
+        <div class="card-body">
+          <dl class="provider-meta">
+            <div><dt>当前账号</dt><dd id="traeCurrentAccount">当前会话（未命名）</dd></div>
+            <div><dt>有效期</dt><dd id="traeExpiryStatus">检查中…</dd></div>
+            <div><dt>自动续期</dt><dd id="traeRefreshStatus">检查中…</dd></div>
+            <div><dt>正在处理 / 排队</dt><dd id="traeConcurrency">0 / 0</dd></div>
+          </dl>
+          <p id="traeStatusHint" class="hint" role="status"></p>
+          <div class="provider-actions">
+            <button id="traeConnectionButton" class="btn secondary sm" type="button" onclick="testTrae(false)">测试连接</button>
+            <button class="btn secondary sm" type="button" onclick="loadTraeStatus(false)">刷新状态</button>
+            <select id="traeTestModel" class="provider-select" aria-label="选择测试对话的模型"><option value="">先测试连接，再选择模型</option></select>
+            <button id="traeChatButton" class="btn secondary sm" type="button" onclick="testTrae(true)">测试对话（消耗额度）</button>
+          </div>
+          <div id="traeOperations" aria-live="polite"></div>
+          <details style="margin:18px 0">
+            <summary>已保存账号</summary>
+            <div class="row"><label for="traeAccountSelect">账号</label><div class="field"><select id="traeAccountSelect" onchange="selectTraeProfile()"><option value="">当前会话（未保存）</option></select></div></div>
+            <div class="row"><label for="traeAccountName">账号名称</label><div class="field"><input id="traeAccountName" type="text" maxlength="80" placeholder="例如：主账号、备用账号"></div></div>
+            <div class="provider-actions">
+              <button class="btn secondary sm" type="button" onclick="activateTraeAccount()">切换到所选账号</button>
+              <button class="btn secondary sm" type="button" onclick="saveTraeAccount(true)">另存为新账号</button>
+              <button class="btn secondary sm" type="button" onclick="saveTraeAccount(false)">更新并切换</button>
+              <button class="btn danger sm" type="button" onclick="deleteTraeAccount()">删除所选账号</button>
+            </div>
+          </details>
+          <div class="row"><label for="traeDisplay">当前令牌</label><div class="field"><input id="traeDisplay" type="text" readonly placeholder="未配置"></div></div>
+          <div class="row"><label for="traeInput">新令牌</label><div class="field"><input id="traeInput" type="password" autocomplete="off" placeholder="Cloud-IDE-JWT 原始值"></div></div>
+          <div class="row"><label for="traeUserID">用户 ID</label><div class="field"><input id="traeUserID" type="text" autocomplete="off" placeholder="可选，账号 UserID"></div></div>
+          <details>
+            <summary class="hint">自动续期设置（可选）</summary>
+            <div class="row"><label for="traeClientID">产品类型</label><div class="field"><select id="traeClientID"><option value="ono9krqynydwx5">Trae Code CN</option><option value="en1oxy7wnw8j9n">TRAE SOLO CN</option></select></div></div>
+            <div class="row"><label for="traeRefresh">刷新令牌</label><div class="field"><input id="traeRefresh" type="password" autocomplete="off" placeholder="可选，RefreshToken；保存时替换旧值"></div></div>
+            <div class="row"><label for="traeExpires">过期时间</label><div class="field"><input id="traeExpires" type="text" placeholder="可选，ISO 8601；JWT 可自动识别"></div></div>
+          </details>
+          <div class="btn-row right">
+            <button class="btn danger sm" type="button" onclick="clearTrae()">清空</button>
+            <button class="btn" type="button" onclick="saveTrae()">保存 Trae 令牌</button>
           </div>
         </div>
       </div>
@@ -989,6 +1041,14 @@ input[readonly] {
       <div class="card">
         <div class="card-head"><div class="card-title">模型列表</div></div>
         <div class="card-body">
+          <div class="model-toolbar">
+            <select id="modelProviderFilter" class="provider-select" aria-label="模型渠道筛选" onchange="renderModels()"><option value="">全部渠道</option><option value="qoder-cn">Qoder CN</option><option value="trae-cn">Trae CN</option><option value="workbuddy-cn">WorkBuddy CN</option></select>
+            <input id="modelSearch" type="search" aria-label="搜索模型" placeholder="搜索名称或模型 ID" oninput="renderModels()">
+            <span id="modelCount" class="hint"></span>
+            <button class="btn secondary sm" type="button" onclick="loadModels()">重新加载</button>
+          </div>
+          <div id="modelProviderErrors" role="status"></div>
+          <p class="hint">能力信息以目录声明为准；未声明的能力需实际验证，模型可见不代表套餐一定可调用。</p>
           <div id="modelsList" class="model-grid"></div>
         </div>
       </div>
@@ -1203,14 +1263,14 @@ setInterval(function() {
 
 function themeDark() {
   var saved = null;
-  try { saved = localStorage.getItem('qoder2api-theme'); } catch (e) {}
+  try { saved = localStorage.getItem('worker-cn-2api-theme'); } catch (e) {}
   if (saved === 'light' || saved === 'dark') return saved === 'dark';
   return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
 function applyTheme(dark) {
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-  try { localStorage.setItem('qoder2api-theme', dark ? 'dark' : 'light'); } catch (e) {}
+  try { localStorage.setItem('worker-cn-2api-theme', dark ? 'dark' : 'light'); } catch (e) {}
   document.querySelectorAll('.icon-moon').forEach(function(el) { el.classList.toggle('hidden', dark); });
   document.querySelectorAll('.icon-sun').forEach(function(el) { el.classList.toggle('hidden', !dark); });
 }
@@ -1379,37 +1439,30 @@ function deleteKey(id) {
     .catch(function(e) { showToast(e.message, 'error'); });
 }
 
-/* ---------- Providers (Qoder & WorkBuddy) ---------- */
+/* ---------- WorkBuddy CN ---------- */
 
 function loadProviders() {
-  loadPAT();
+  loadQoder();
   loadWorkBuddy();
+  loadTrae();
 }
 
-function loadPAT() {
-  api('/pat').then(function(data) {
-    document.getElementById('patDisplay').value = data.pat_masked || '';
-    document.getElementById('patInput').value = '';
-    var b = document.getElementById('qoderBadge');
-    if (b) {
-      if (data.pat_masked) {
-        b.className = 'badge ok';
-        b.textContent = '已连接';
-      } else {
-        b.className = 'badge bad';
-        b.textContent = '未配置';
-      }
-    }
+function loadQoder() {
+  return api('/qoder').then(function(data) {
+    document.getElementById('qoderDisplay').value = data.token_masked || '';
+    document.getElementById('qoderInput').value = '';
+    var badge = document.getElementById('qoderBadge'); badge.textContent = data.configured ? '已配置' : '未配置'; badge.className = data.configured ? 'badge ok' : 'badge bad';
   }).catch(function(e) { showToast(e.message, 'error'); });
 }
-
-function savePAT() {
-  var pat = document.getElementById('patInput').value.trim();
-  if (!pat) { showToast('PAT 不能为空', 'error'); return; }
-  api('/pat', { method: 'POST', body: JSON.stringify({ pat: pat }) })
-    .then(function() { showToast('Qoder 令牌已保存'); loadPAT(); })
-    .catch(function(e) { showToast(e.message, 'error'); });
+function saveQoder() {
+  var pat = document.getElementById('qoderInput').value.trim(); if (!pat) { showToast('请输入 PAT', 'error'); return; }
+  api('/qoder', { method: 'POST', body: JSON.stringify({ pat: pat }) }).then(function() { showToast('已保存'); loadQoder(); }).catch(function(e) { showToast(e.message, 'error'); });
 }
+function clearQoder() {
+  if (!confirm('清空 Qoder PAT？')) return;
+  api('/qoder', { method: 'DELETE' }).then(function() { showToast('已清空'); loadQoder(); }).catch(function(e) { showToast(e.message, 'error'); });
+}
+function providerLabel(id) { return { 'qoder-cn':'Qoder CN', 'trae-cn':'Trae CN', 'workbuddy-cn':'WorkBuddy CN' }[id] || id; }
 
 function loadWorkBuddy() {
   api('/workbuddy').then(function(data) {
@@ -1419,7 +1472,7 @@ function loadWorkBuddy() {
     if (b) {
       if (data.configured) {
         b.className = 'badge ok';
-        b.textContent = '已连接';
+        b.textContent = '已配置';
       } else {
         b.className = 'badge bad';
         b.textContent = '未配置';
@@ -1443,39 +1496,156 @@ function clearWorkBuddy() {
     .catch(function(e) { showToast(e.message, 'error'); });
 }
 
+var traeProfiles = [];
+function timeLabel(value) {
+  if (!value) return '尚无记录';
+  var date = new Date(value);
+  return isNaN(date.getTime()) ? '时间未知' : date.toLocaleString('zh-CN', { hour12: false });
+}
+function showTraeStatus(data) {
+  var status = data.status || {};
+  var seconds = status.expires_in_seconds;
+  var badge = document.getElementById('traeBadge');
+  var label = data.configured ? '已配置 · 未验证' : '未配置';
+  var cls = data.configured ? 'badge' : 'badge bad';
+  if (status.last_test && status.last_test.at) {
+    label = status.last_test.success ? '最近测试通过' : '最近测试失败';
+    cls = status.last_test.success ? 'badge ok' : 'badge bad';
+  }
+  if (data.configured && typeof seconds === 'number' && seconds <= 0) { label = '访问令牌已到期'; cls = 'badge warn'; }
+  else if (data.configured && typeof seconds === 'number' && seconds < 86400) { label += ' · 即将到期'; if (cls !== 'badge bad') cls = 'badge warn'; }
+  badge.textContent = label; badge.className = cls;
+  var expiry = status.expires_at || data.expires_at;
+  document.getElementById('traeExpiryStatus').textContent = !data.configured ? '未配置' : expiry ? timeLabel(expiry) + (seconds <= 0 ? '（已到期）' : seconds < 86400 ? '（24 小时内到期）' : '') : '上游未声明过期时间';
+  document.getElementById('traeRefreshStatus').textContent = status.persistence_pending ? '会话已续期，等待重试保存' : status.refresh_available ? '已配置刷新凭据，到期前自动续期' : '未配置刷新凭据，需手动更新';
+  document.getElementById('traeConcurrency').textContent = (status.active_requests || 0) + ' / ' + (status.queued_requests || 0);
+  var hint = status.persistence_pending ? '会话保存失败，请检查配置文件权限。' : '';
+  document.getElementById('traeStatusHint').textContent = hint;
+  var container = document.getElementById('traeOperations'); container.innerHTML = '';
+  [['最近连接测试', status.last_test], ['最近令牌续期', status.last_refresh], ['最近模型目录请求', status.last_catalog], ['最近聊天请求', status.last_chat]].forEach(function(entry) {
+    var op = entry[1] || {}; var row = document.createElement('div');
+    row.className = 'provider-operation' + (op.at && !op.success ? ' failed' : '');
+    row.textContent = entry[0] + '：' + (!op.at ? '尚无记录' : timeLabel(op.at) + ' · ' + (op.success ? '成功' : '失败') + ' · ' + op.duration_ms + ' ms' + (op.error ? '\n' + op.error : ''));
+    container.appendChild(row);
+  });
+}
+function loadTraeStatus(silent) {
+  return api('/trae').then(showTraeStatus).catch(function(e) { if (!silent) showToast(e.message, 'error'); });
+}
+function loadTrae() {
+  return api('/trae').then(function(data) {
+    document.getElementById('traeDisplay').value = data.token_masked || '';
+    document.getElementById('traeInput').value = '';
+    document.getElementById('traeUserID').value = data.user_id || '';
+    document.getElementById('traeRefresh').value = '';
+    document.getElementById('traeExpires').value = data.expires_at || '';
+    document.getElementById('traeClientID').value = data.client_id || 'ono9krqynydwx5';
+    showTraeStatus(data);
+    document.getElementById('traeTestModel').innerHTML = '<option value="">先测试连接，再选择模型</option>';
+    return loadTraeAccounts();
+  }).catch(function(e) { showToast(e.message, 'error'); });
+}
+function traeForm() {
+  return { token: document.getElementById('traeInput').value.trim(), user_id: document.getElementById('traeUserID').value.trim(), refresh_token: document.getElementById('traeRefresh').value.trim(), expires_at: document.getElementById('traeExpires').value.trim(), client_id: document.getElementById('traeClientID').value };
+}
+function saveTrae() {
+  var form = traeForm();
+  if (!form.token) { showToast('请输入新令牌；保存当前会话可使用另存为新账号', 'error'); return; }
+  api('/trae', { method: 'POST', body: JSON.stringify(form) })
+    .then(function() { showToast('Trae 凭据已保存并热生效'); loadTrae(); })
+    .catch(function(e) { showToast(e.message, 'error'); });
+}
+function clearTrae() {
+  if (!confirm('确定清空当前 Trae 账号的令牌？已保存的其他账号不受影响。')) return;
+  api('/trae', { method: 'DELETE' })
+    .then(function() { showToast('当前 Trae 令牌已清空'); loadTrae(); })
+    .catch(function(e) { showToast(e.message, 'error'); });
+}
+function testTrae(chat) {
+  var model = chat ? document.getElementById('traeTestModel').value : '';
+  if (chat && !model) { showToast('请先测试连接，再选择测试模型', 'error'); return; }
+  var connectionButton = document.getElementById('traeConnectionButton'), chatButton = document.getElementById('traeChatButton');
+  connectionButton.disabled = true; chatButton.disabled = true;
+  var button = chat ? chatButton : connectionButton; var old = button.textContent; button.textContent = '测试中…';
+  api('/trae/test', { method: 'POST', body: JSON.stringify({ model: model }) }).then(function(result) {
+    var select = document.getElementById('traeTestModel'); select.innerHTML = '<option value="">选择测试对话的模型</option>';
+    (result.models || []).forEach(function(m) { var option = document.createElement('option'); option.value = m.id; option.textContent = m.name + ' · ' + m.id; select.appendChild(option); });
+    if (model) select.value = model;
+    showToast((result.chat_tested ? '对话测试通过' : '连接通过，返回 ' + result.model_count + ' 个模型') + ' · ' + result.duration_ms + ' ms');
+  }).catch(function(e) { showToast(e.message, 'error'); }).finally(function() {
+    button.textContent = old; connectionButton.disabled = false; chatButton.disabled = false; loadTraeStatus(true);
+  });
+}
+function loadTraeAccounts() {
+  return api('/trae/accounts').then(function(data) {
+    traeProfiles = data.accounts || []; var select = document.getElementById('traeAccountSelect');
+    select.innerHTML = '<option value="">当前会话（未保存）</option>';
+    var activeName = '当前会话（未命名）';
+    traeProfiles.forEach(function(profile) { var option = document.createElement('option'); option.value = profile.id; option.textContent = profile.name + (profile.active ? ' · 当前使用' : '') + (!profile.configured ? ' · 无令牌' : ''); select.appendChild(option); if (profile.active) activeName = profile.name; });
+    select.value = data.active_id || ''; document.getElementById('traeCurrentAccount').textContent = activeName; selectTraeProfile();
+  });
+}
+function selectTraeProfile() {
+  var id = document.getElementById('traeAccountSelect').value;
+  var profile = traeProfiles.find(function(p) { return p.id === id; });
+  document.getElementById('traeAccountName').value = profile ? profile.name : '';
+}
+function saveTraeAccount(asNew) {
+  var form = traeForm(); form.action = 'save'; form.name = document.getElementById('traeAccountName').value.trim();
+  form.id = asNew ? '' : document.getElementById('traeAccountSelect').value;
+  if (!form.name) { showToast('请输入账号名称', 'error'); return; }
+  if (!asNew && !form.id) { showToast('请选择已保存账号，或使用另存为新账号', 'error'); return; }
+  api('/trae/accounts', { method: 'POST', body: JSON.stringify(form) }).then(function() { showToast('账号已保存并切换'); loadTrae(); }).catch(function(e) { showToast(e.message, 'error'); });
+}
+function activateTraeAccount() {
+  var id = document.getElementById('traeAccountSelect').value;
+  if (!id) { showToast('请选择已保存账号', 'error'); return; }
+  api('/trae/accounts', { method: 'POST', body: JSON.stringify({ action: 'activate', id: id }) }).then(function() { showToast('账号已切换'); loadTrae(); }).catch(function(e) { showToast(e.message, 'error'); });
+}
+function deleteTraeAccount() {
+  var id = document.getElementById('traeAccountSelect').value;
+  if (!id) { showToast('请选择要删除的账号', 'error'); return; }
+  if (!confirm('确定删除所选账号？删除当前账号会立即停用该渠道。')) return;
+  api('/trae/accounts?id=' + encodeURIComponent(id), { method: 'DELETE' }).then(function() { showToast('账号已删除'); loadTrae(); }).catch(function(e) { showToast(e.message, 'error'); });
+}
+setInterval(function() { if (loggedIn && currentPage === 'token') loadTraeStatus(true); }, 15000);
+
 /* ---------- Models ---------- */
 
+var cachedModels = [];
 function loadModels() {
+  document.getElementById('modelCount').textContent = '加载中…';
   api('/models').then(function(data) {
-    var g = document.getElementById('modelsList');
-    g.innerHTML = '';
-    if (!data.models || data.models.length === 0) {
-      g.innerHTML = '<p class="hint" style="margin:0">暂无可用模型</p>';
-      return;
-    }
-    data.models.forEach(function(item) {
-      var name = typeof item === 'string' ? item : item.name;
-      var prov = typeof item === 'string' ? 'qoder' : (item.provider || 'qoder');
-      var provLabel = prov === 'workbuddy' ? 'WorkBuddy' : 'Qoder';
-      var badgeCls = prov === 'workbuddy' ? 'badge ok' : 'badge';
-
-      var d = document.createElement('div');
-      d.className = 'model-item';
-      d.style.display = 'flex';
-      d.style.alignItems = 'center';
-      d.style.justifyContent = 'space-between';
-      d.style.gap = '10px';
-
-      d.innerHTML = '<div style="display:flex;align-items:center;gap:8px;"><span class="mono">' + escapeHtml(name) + '</span><span class="' + badgeCls + '" style="font-size:10px;padding:1px 6px;">' + provLabel + '</span></div>';
-      var copyBtn = document.createElement('button');
-      copyBtn.className = 'btn secondary sm';
-      copyBtn.type = 'button';
-      copyBtn.textContent = '复制';
-      copyBtn.addEventListener('click', function() { copyText(name); });
-      d.appendChild(copyBtn);
-      g.appendChild(d);
+    cachedModels = data.models || [];
+    var errors = document.getElementById('modelProviderErrors'); errors.innerHTML = '';
+    Object.keys(data.provider_errors || {}).forEach(function(provider) {
+      var p = document.createElement('p'); p.className = 'hint-warn'; p.textContent = providerLabel(provider) + ' 目录获取失败：' + data.provider_errors[provider]; errors.appendChild(p);
     });
-  }).catch(function(e) { showToast(e.message, 'error'); });
+    renderModels();
+  }).catch(function(e) { document.getElementById('modelCount').textContent = '加载失败'; showToast(e.message, 'error'); });
+}
+function renderModels() {
+  var provider = document.getElementById('modelProviderFilter').value;
+  var search = document.getElementById('modelSearch').value.trim().toLowerCase();
+  var list = cachedModels.filter(function(item) { return (!provider || item.provider === provider) && (!search || ((item.name || '') + ' ' + (item.display_name || '')).toLowerCase().includes(search)); });
+  var grid = document.getElementById('modelsList'); grid.innerHTML = '';
+  document.getElementById('modelCount').textContent = list.length + ' / ' + cachedModels.length + ' 个模型';
+  if (!list.length) { var empty = document.createElement('p'); empty.className = 'hint'; empty.textContent = '没有符合条件的模型'; grid.appendChild(empty); return; }
+  list.forEach(function(item) {
+    var name = item.name; var card = document.createElement('div'); card.className = 'model-item';
+    var content = document.createElement('div'); content.className = 'model-card-content';
+    var title = document.createElement('div'); title.className = 'model-card-title mono'; title.textContent = name; content.appendChild(title);
+    var badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = providerLabel(item.provider); content.appendChild(badge);
+    var lines = [];
+    if (item.display_name && item.display_name !== name) lines.push(item.display_name);
+    lines.push('上下文：' + (item.context_window ? Number(item.context_window).toLocaleString('zh-CN') + ' tokens' : '未声明'));
+    lines.push('最大输出：' + (item.max_output_tokens ? Number(item.max_output_tokens).toLocaleString('zh-CN') + ' tokens' : '未声明'));
+    lines.push('函数工具：' + (item.supports_tools === true ? '目录声明支持' : item.supports_tools === false ? '目录声明不支持' : '模型能力待验证'));
+    if (item.provider === 'trae-cn') lines.push('文本聊天通道 · 不支持图片输入');
+    var detail = document.createElement('div'); detail.className = 'model-card-description';
+    lines.forEach(function(line) { var row = document.createElement('div'); row.textContent = line; detail.appendChild(row); }); content.appendChild(detail); card.appendChild(content);
+    var copy = document.createElement('button'); copy.className = 'btn secondary sm'; copy.type = 'button'; copy.textContent = '复制'; copy.setAttribute('aria-label', '复制模型 ' + name); copy.addEventListener('click', function() { copyText(name); }); card.appendChild(copy); grid.appendChild(card);
+  });
 }
 
 /* ---------- Config ---------- */

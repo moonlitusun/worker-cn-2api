@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	DefaultUpstreamURL = "https://copilot.tencent.com/v2/chat/completions"
-	DefaultClientVer   = "1.4.12"
+	DefaultUpstreamURL = "https://www.workbuddy.cn/v2/chat/completions"
+	DefaultClientVer   = "5.5.4"
 	DefaultPlatform    = "darwin"
 )
 
@@ -37,7 +37,7 @@ type Config struct {
 // ResolveConfig resolves the configuration using environment variables,
 // explicit overrides, or falling back to local desktop client credentials.
 func ResolveConfig(explicitToken string) *Config {
-	token := explicitToken
+	token := strings.TrimSpace(explicitToken)
 	if token == "" {
 		token = os.Getenv("WORKER_WORKBUDDY_TOKEN")
 	}
@@ -69,12 +69,6 @@ func ResolveConfig(explicitToken string) *Config {
 		plat = DefaultPlatform
 	}
 
-	if userID == "" && len(token) > 16 {
-		userID = token[:16]
-	} else if userID == "" {
-		userID = "default-user"
-	}
-
 	deviceID := DeriveDeviceID(userID)
 
 	return &Config{
@@ -99,19 +93,35 @@ func detectLocalDesktopAuth() (*DesktopAuthInfo, error) {
 	if runtime.GOOS == "darwin" {
 		candidatePaths = append(candidatePaths, filepath.Join(home, "Library", "Application Support", "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info"))
 	} else if runtime.GOOS == "windows" {
-		appData := os.Getenv("APPDATA")
+		appData := os.Getenv("LOCALAPPDATA")
 		if appData != "" {
 			candidatePaths = append(candidatePaths, filepath.Join(appData, "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info"))
 		}
 	} else {
-		candidatePaths = append(candidatePaths, filepath.Join(home, ".config", "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info"))
+		candidatePaths = append(candidatePaths, filepath.Join(home, ".local", "share", "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info"))
 	}
 
 	for _, path := range candidatePaths {
 		data, err := os.ReadFile(path)
 		if err == nil && len(data) > 0 {
 			var info DesktopAuthInfo
-			if err := json.Unmarshal(data, &info); err == nil && info.AuthToken != "" {
+			var current struct {
+				Auth struct {
+					AccessToken string `json:"accessToken"`
+					Domain      string `json:"domain"`
+				}
+				Account struct {
+					UID string `json:"uid"`
+				}
+			}
+			if json.Unmarshal(data, &current) == nil && current.Auth.AccessToken != "" && !strings.Contains(current.Auth.Domain, ".ai") {
+				info.AuthToken = current.Auth.AccessToken
+				info.UserID = current.Account.UID
+			}
+			if info.AuthToken == "" {
+				_ = json.Unmarshal(data, &info)
+			}
+			if info.AuthToken != "" && info.Region != "intl" && info.Region != "international" {
 				info.AuthToken = strings.TrimSpace(info.AuthToken)
 				return &info, nil
 			}

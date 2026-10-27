@@ -12,8 +12,13 @@ services:
       WORKER_DATA_PATH: /app/data/data.json
       TZ: "Asia/Shanghai"
       WORKER_MAX_CONCURRENCY: "2"
-      # WorkBuddy CN 授权 Token (配置后自动激活 WorkBuddy 渠道支持 deepseek-v3/r1、hunyuan-code 等)
+      # WorkBuddy CN 授权 Token (配置后自动激活 WorkBuddy 渠道模型列表从中国区接口获取)
       # WORKER_WORKBUDDY_TOKEN: "your-workbuddy-auth-token"
+      # Trae CN 原始 Cloud-IDE-JWT；也可在管理页面配置
+      # WORKER_TRAE_TOKEN: "your-trae-cloud-ide-jwt"
+      # WORKER_TRAE_REFRESH_TOKEN: "your-trae-refresh-token"
+      # SOLO CN 使用 en1oxy7wnw8j9n；Code CN 使用 ono9krqynydwx5
+      # WORKER_TRAE_CLIENT_ID: "en1oxy7wnw8j9n"
     volumes:
       - ./data:/app/data
     healthcheck:

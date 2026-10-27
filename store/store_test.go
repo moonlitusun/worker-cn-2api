@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"qoder2api/stats"
+	"worker-cn-2api/stats"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -63,17 +63,17 @@ func TestHostPortPersistence(t *testing.T) {
 	}
 }
 
-func TestPAT(t *testing.T) {
+func TestWorkBuddyToken(t *testing.T) {
 	s := tempStore(t)
-	if s.GetPAT() != "" {
-		t.Errorf("expected empty PAT, got %q", s.GetPAT())
+	if s.GetWorkBuddyToken() != "" {
+		t.Errorf("expected empty PAT, got %q", s.GetWorkBuddyToken())
 	}
 	pat := "pt-test123"
-	if err := s.SetPAT(pat); err != nil {
-		t.Fatalf("SetPAT failed: %v", err)
+	if err := s.SetWorkBuddyToken(pat); err != nil {
+		t.Fatalf("SetWorkBuddyToken failed: %v", err)
 	}
-	if s.GetPAT() != pat {
-		t.Errorf("expected %q, got %q", pat, s.GetPAT())
+	if s.GetWorkBuddyToken() != pat {
+		t.Errorf("expected %q, got %q", pat, s.GetWorkBuddyToken())
 	}
 }
 
@@ -162,14 +162,14 @@ func TestPersistence(t *testing.T) {
 
 	s1, _ := New(path)
 	s1.AddKey("sk-persist", "persist note")
-	s1.SetPAT("pt-persist")
+	s1.SetWorkBuddyToken("pt-persist")
 
 	s2, err := New(path)
 	if err != nil {
 		t.Fatalf("reload failed: %v", err)
 	}
-	if s2.GetPAT() != "pt-persist" {
-		t.Errorf("expected persisted PAT 'pt-persist', got %q", s2.GetPAT())
+	if s2.GetWorkBuddyToken() != "pt-persist" {
+		t.Errorf("expected persisted PAT 'pt-persist', got %q", s2.GetWorkBuddyToken())
 	}
 	if !s2.ValidateKey("sk-persist") {
 		t.Error("expected persisted key to be valid")
@@ -233,7 +233,7 @@ func TestFilePermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "data.json")
 	s, _ := New(path)
-	s.SetPAT("pt-secret")
+	s.SetWorkBuddyToken("pt-secret")
 
 	info, err := os.Stat(path)
 	if err != nil {

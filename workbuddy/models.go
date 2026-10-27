@@ -1,84 +1,102 @@
 package workbuddy
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sort"
 	"strings"
+	"time"
 )
 
-// ModelInfo describes a model supported by WorkBuddy CN.
+// ModelInfo is a model from the authenticated WorkBuddy CN catalog.
 type ModelInfo struct {
-	ID          string `json:"id"`
-	UpstreamKey string `json:"upstream_key"`
-	Description string `json:"description"`
-	IsReasoning bool   `json:"is_reasoning"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	SupportsToolCall  *bool    `json:"supportsToolCall,omitempty"`
+	SupportsReasoning bool     `json:"supportsReasoning,omitempty"`
+	MaxInputTokens    int      `json:"maxInputTokens,omitempty"`
+	MaxOutputTokens   int      `json:"maxOutputTokens,omitempty"`
 }
 
-var supportedModels = []ModelInfo{
-	{
-		ID:          "deepseek-v3",
-		UpstreamKey: "deepseek-v3",
-		Description: "DeepSeek V3 深度求索通用编程大模型",
-		IsReasoning: false,
-	},
-	{
-		ID:          "deepseek-r1",
-		UpstreamKey: "deepseek-r1",
-		Description: "DeepSeek R1 具备原生思考过程（Reasoning）的推理模型",
-		IsReasoning: true,
-	},
-	{
-		ID:          "hunyuan-code",
-		UpstreamKey: "hunyuan-standard-code",
-		Description: "腾讯混元代码专精大模型",
-		IsReasoning: false,
-	},
-	{
-		ID:          "kimi-k2",
-		UpstreamKey: "kimi-k2",
-		Description: "Kimi 长上下文编程模型",
-		IsReasoning: false,
-	},
-	{
-		ID:          "glm-4",
-		UpstreamKey: "glm-4-plus",
-		Description: "智谱 GLM-4 旗舰大模型",
-		IsReasoning: false,
-	},
-}
-
-// SupportedModelIDs returns the list of all supported OpenAI model IDs.
-func SupportedModelIDs() []string {
-	ids := make([]string, len(supportedModels))
-	for i, m := range supportedModels {
-		ids[i] = m.ID
+// Models caches only a successfully fetched catalog for the active credential.
+func (b *Bridge) Models(ctx context.Context) ([]ModelInfo, error) {
+	b.catalogMu.Lock()
+	defer b.catalogMu.Unlock()
+	cfg := b.Config()
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("WorkBuddy CN token is not configured")
 	}
-	return ids
-}
-
-// IsWorkbuddyModel checks if the given model parameter belongs to WorkBuddy.
-func IsWorkbuddyModel(modelParam string) bool {
-	norm := strings.ToLower(strings.TrimSpace(modelParam))
-	norm = strings.TrimPrefix(norm, "workbuddy/")
-	for _, m := range supportedModels {
-		if strings.ToLower(m.ID) == norm || strings.ToLower(m.UpstreamKey) == norm {
-			return true
+	if b.catalogToken == cfg.Token && time.Since(b.catalogAt) < time.Hour {
+		return append([]ModelInfo(nil), b.catalog...), nil
+	}
+	endpoint, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	endpoint.Path = "/v2/enterprises/personal/models"
+	endpoint.RawQuery = ""
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	setHeaders(req, cfg)
+	resp, err := b.client.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, readUpstreamError(resp)
+	}
+	var raw struct {
+		Models []ModelInfo `json:"models"`
+		Data   struct {
+			Models []ModelInfo `json:"models"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("invalid model catalog: %w", err)
+	}
+	items := raw.Models
+	if len(items) == 0 {
+		items = raw.Data.Models
+	}
+	seen := map[string]bool{}
+	result := []ModelInfo{}
+	for _, m := range items {
+		imageOnly := false
+		for _, tag := range m.Tags {
+			if tag == "text-to-image" {
+				imageOnly = true
+			}
+		}
+		if m.ID != "" && !seen[m.ID] && !imageOnly {
+			seen[m.ID] = true
+			result = append(result, m)
 		}
 	}
-	return false
+	if len(result) == 0 {
+		return nil, fmt.Errorf("WorkBuddy CN returned an empty model catalog")
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	b.catalog, b.catalogAt, b.catalogToken = result, time.Now(), cfg.Token
+	return append([]ModelInfo(nil), result...), nil
 }
 
-// ResolveModel maps an OpenAI model name to the WorkBuddy upstream model key.
-func ResolveModel(modelParam string) (*ModelInfo, error) {
-	norm := strings.ToLower(strings.TrimSpace(modelParam))
-	norm = strings.TrimPrefix(norm, "workbuddy/")
-	if norm == "" {
-		// Default model
-		return &supportedModels[0], nil
+func normalizeModel(model string) (string, error) {
+	model = strings.TrimPrefix(strings.TrimSpace(model), "workbuddy/")
+	if model == "" {
+		return "", fmt.Errorf("model is required; select an ID from /v1/models")
 	}
-	for _, m := range supportedModels {
-		if strings.ToLower(m.ID) == norm || strings.ToLower(m.UpstreamKey) == norm {
-			return &m, nil
-		}
+	if strings.Contains(model, "/") {
+		return "", fmt.Errorf("only WorkBuddy CN model IDs are supported")
 	}
-	return nil, fmt.Errorf("unsupported WorkBuddy model %q, available: %s", modelParam, strings.Join(SupportedModelIDs(), ", "))
+	return model, nil
 }

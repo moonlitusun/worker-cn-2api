@@ -3,7 +3,7 @@ package bridge
 import (
 	"testing"
 
-	"qoder2api/models"
+	"worker-cn-2api/qoder/models"
 )
 
 func TestNextCatalogKeepsLastFetchedOnFailure(t *testing.T) {

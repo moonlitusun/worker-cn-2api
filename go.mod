@@ -1,4 +1,4 @@
-module qoder2api
+module worker-cn-2api
 
 go 1.22
 

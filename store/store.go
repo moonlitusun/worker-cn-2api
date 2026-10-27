@@ -1,5 +1,5 @@
 // Package store provides JSON file-based persistence for API keys
-// and PAT token.
+// and WorkBuddy CN token.
 package store
 
 import (
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"qoder2api/stats"
+	"worker-cn-2api/stats"
 )
 
 // ErrDuplicateKey is returned by AddKey when an identical key already exists.
@@ -29,18 +29,50 @@ type APIKey struct {
 
 // Config is the on-disk JSON structure.
 type Config struct {
-	Host     string      `json:"host"`
-	Port               int         `json:"port"`
-	PAT                string      `json:"pat"`
-	WorkBuddyToken     string      `json:"workbuddy_token,omitempty"`
-	Password           string      `json:"password"`
-	APIKeys  []APIKey    `json:"api_keys"`
-	Stats    *stats.Data `json:"stats,omitempty"`
+	PAT               string        `json:"pat,omitempty"`
+	TraeAccounts      []TraeAccount `json:"trae_accounts,omitempty"`
+	TraeActiveAccount string        `json:"trae_active_account,omitempty"`
+	TraeSession       *TraeSession  `json:"trae_session,omitempty"`
+	Host              string        `json:"host"`
+	Port              int           `json:"port"`
+	WorkBuddyToken    string        `json:"workbuddy_token,omitempty"`
+	TraeToken         string        `json:"trae_token,omitempty"`
+	TraeUserID        string        `json:"trae_user_id,omitempty"`
+	Password          string        `json:"password"`
+	APIKeys           []APIKey      `json:"api_keys"`
+	Stats             *stats.Data   `json:"stats,omitempty"`
 	// ChatTimeoutSeconds bounds how long the upstream chat stream may take
 	// to start responding (time to response headers). IdleTimeoutSeconds
 	// bounds how long an established SSE stream may stay silent.
 	ChatTimeoutSeconds int `json:"chat_timeout_seconds"`
 	IdleTimeoutSeconds int `json:"idle_timeout_seconds"`
+}
+
+func (s *Store) GetQoderPAT() string { s.mu.RLock(); defer s.mu.RUnlock(); return s.config.PAT }
+func (s *Store) SetQoderPAT(pat string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.config.PAT
+	s.config.PAT = pat
+	if err := s.saveLocked(); err != nil {
+		s.config.PAT = old
+		return err
+	}
+	return nil
+}
+
+type TraeSession struct {
+	Token        string `json:"token"`
+	UserID       string `json:"user_id,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+}
+
+type TraeAccount struct {
+	ID      string      `json:"id"`
+	Name    string      `json:"name"`
+	Session TraeSession `json:"session"`
 }
 
 // DefaultHost is the default listen host.
@@ -282,21 +314,6 @@ func (s *Store) SetPassword(password string) error {
 	return s.save()
 }
 
-// --- PAT ---
-
-func (s *Store) GetPAT() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.PAT
-}
-
-func (s *Store) SetPAT(pat string) error {
-	s.mu.Lock()
-	s.config.PAT = pat
-	s.mu.Unlock()
-	return s.save()
-}
-
 // --- WorkBuddy ---
 
 func (s *Store) GetWorkBuddyToken() string {
@@ -313,6 +330,52 @@ func (s *Store) SetWorkBuddyToken(token string) error {
 }
 
 // --- Stats ---
+
+func (s *Store) GetTraeCredentials() (string, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config.TraeSession != nil {
+		return s.config.TraeSession.Token, s.config.TraeSession.UserID
+	}
+	return s.config.TraeToken, s.config.TraeUserID
+}
+
+// SetTraeCredentials persists both fields atomically and rolls back on failure.
+func (s *Store) SetTraeCredentials(token, userID string) error {
+	return s.SetTraeSession(TraeSession{Token: token, UserID: userID})
+}
+
+func (s *Store) GetTraeSession() TraeSession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config.TraeSession != nil {
+		return *s.config.TraeSession
+	}
+	return TraeSession{Token: s.config.TraeToken, UserID: s.config.TraeUserID}
+}
+
+func (s *Store) SetTraeSession(session TraeSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	oldToken, oldUserID := s.config.TraeToken, s.config.TraeUserID
+	oldSession := s.config.TraeSession
+	oldAccounts := s.config.TraeAccounts
+	s.config.TraeAccounts = append([]TraeAccount(nil), oldAccounts...)
+	for i := range s.config.TraeAccounts {
+		if s.config.TraeAccounts[i].ID == s.config.TraeActiveAccount {
+			s.config.TraeAccounts[i].Session = session
+		}
+	}
+	s.config.TraeToken, s.config.TraeUserID = "", ""
+	s.config.TraeSession = &session
+	if err := s.saveLocked(); err != nil {
+		s.config.TraeToken, s.config.TraeUserID = oldToken, oldUserID
+		s.config.TraeSession = oldSession
+		s.config.TraeAccounts = oldAccounts
+		return err
+	}
+	return nil
+}
 
 // LoadStats returns a deep copy of the persisted stats snapshot, or nil if
 // none exists. A copy is returned so callers can never race with concurrent

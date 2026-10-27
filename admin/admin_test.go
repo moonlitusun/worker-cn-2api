@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"qoder2api/auth"
-	"qoder2api/models"
-	"qoder2api/stats"
-	"qoder2api/store"
+	"worker-cn-2api/auth"
+	"worker-cn-2api/stats"
+	"worker-cn-2api/store"
 )
 
 func tempStore(t *testing.T) *store.Store {
@@ -28,10 +26,7 @@ func tempStore(t *testing.T) *store.Store {
 
 func newAdmin(t *testing.T) (*Admin, *store.Store) {
 	s := tempStore(t)
-	mf := func(ctx context.Context) []string {
-		return models.DefaultCatalog().Keys()
-	}
-	return New(s, mf, nil), s
+	return New(s, nil), s
 }
 
 func doRequest(t *testing.T, handler http.HandlerFunc, method, path string, body interface{}) *httptest.ResponseRecorder {
@@ -97,30 +92,6 @@ func TestDeleteKeyMissingID(t *testing.T) {
 
 // -- PAT --
 
-func TestPATSetAndGet(t *testing.T) {
-	a, _ := newAdmin(t)
-	w := doRequest(t, a.handlePAT, "POST", "/admin/api/pat", map[string]string{"pat": "pt-test123"})
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	w = doRequest(t, a.handlePAT, "GET", "/admin/api/pat", nil)
-	if w.Code != 200 {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	// The plaintext PAT must never appear in the response; only the masked form.
-	if strings.Contains(w.Body.String(), "pt-test123") {
-		t.Error("response must not leak the plaintext PAT")
-	}
-	var resp map[string]string
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if _, ok := resp["pat"]; ok {
-		t.Error("response must not contain a 'pat' field")
-	}
-	if resp["pat_masked"] != "pt-t****t123" {
-		t.Errorf("expected masked PAT, got %q", resp["pat_masked"])
-	}
-}
-
 func TestWorkBuddySetAndGet(t *testing.T) {
 	a, _ := newAdmin(t)
 	w := doRequest(t, a.handleWorkBuddy, "POST", "/admin/api/workbuddy", map[string]string{"token": "wb_test_token_123456789"})
@@ -155,26 +126,6 @@ func TestWorkBuddySetAndGet(t *testing.T) {
 	}
 }
 
-func TestMaskPAT(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"", ""},
-		{"short", "****"},
-		{"pt-12345678", "pt-1****5678"},
-		{"pt-very-long-token-here", "pt-v****here"},
-	}
-	for _, tt := range tests {
-		got := maskPAT(tt.input)
-		if got != tt.expected {
-			t.Errorf("maskPAT(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-// -- Models --
-
 func TestModels(t *testing.T) {
 	a, _ := newAdmin(t)
 	w := doRequest(t, a.handleModels, "GET", "/admin/api/models", nil)
@@ -187,8 +138,8 @@ func TestModels(t *testing.T) {
 	if !ok {
 		t.Fatal("expected models array in response")
 	}
-	if len(models) == 0 {
-		t.Error("expected non-empty models list")
+	if len(models) != 0 {
+		t.Error("unconfigured bridge must not advertise models")
 	}
 }
 
@@ -249,14 +200,11 @@ func TestConfigSetDefaults(t *testing.T) {
 
 func TestStatsEndpoint(t *testing.T) {
 	s := tempStore(t)
-	mf := func(ctx context.Context) []string {
-		return models.DefaultCatalog().Keys()
-	}
 	rec := stats.NewRecorder(nil)
 	rec.Record("Qwen3.7-Max", true)
 	rec.Record("Qwen3.7-Max", false)
 	rec.Record("DeepSeek-V4-Pro", true)
-	a := New(s, mf, rec)
+	a := New(s, rec)
 
 	w := doRequest(t, a.handleStats, "GET", "/admin/api/stats", nil)
 	if w.Code != 200 {
@@ -489,7 +437,7 @@ func TestConfigSetTimeoutValidation(t *testing.T) {
 // When timeouts are pinned by env vars the panel must refuse changes (the
 // env would silently win again after the next restart).
 func TestConfigTimeoutsEnvManaged(t *testing.T) {
-	t.Setenv("QODER_CHAT_TIMEOUT_SECONDS", "90")
+	t.Setenv("WORKER_CHAT_TIMEOUT_SECONDS", "90")
 	a, _ := newAdmin(t)
 	w := doRequest(t, a.handleConfig, "POST", "/admin/api/config", map[string]interface{}{
 		"host": "0.0.0.0", "port": 10081, "chat_timeout_seconds": 60,
@@ -504,7 +452,7 @@ func TestConfigTimeoutsEnvManaged(t *testing.T) {
 func TestConfigLegacyBodyKeepsEnvTimeouts(t *testing.T) {
 	auth.SetStreamTimeouts(200*time.Second, 300*time.Second)
 	defer auth.SetStreamTimeouts(auth.DefaultChatHeaderTimeout, auth.DefaultChatIdleTimeout)
-	t.Setenv("QODER_CHAT_TIMEOUT_SECONDS", "200")
+	t.Setenv("WORKER_CHAT_TIMEOUT_SECONDS", "200")
 
 	a, s := newAdmin(t)
 	w := doRequest(t, a.handleConfig, "POST", "/admin/api/config", map[string]interface{}{"host": "0.0.0.0", "port": 10081})
@@ -537,5 +485,28 @@ func TestConfigPartialInvalidTimeoutAppliesNothing(t *testing.T) {
 	timeouts := auth.CurrentStreamTimeouts()
 	if timeouts.Header != auth.DefaultChatHeaderTimeout {
 		t.Errorf("hot-apply must not run on rejected input, got %s", timeouts.Header)
+	}
+}
+
+func TestQoderAdminRouteRequiresLogin(t *testing.T) {
+	a, _ := newAdmin(t)
+	mux := http.NewServeMux()
+	a.RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/admin/api/pat", nil))
+	if w.Code != 401 {
+		t.Fatalf("Qoder credential route must require login: %d", w.Code)
+	}
+}
+
+func TestWorkerPasswordEnvironment(t *testing.T) {
+	t.Setenv("WORKER_ADMIN_PASSWORD", "env-password")
+	a, _ := newAdmin(t)
+	if a.getPassword() != "env-password" {
+		t.Fatal("worker password environment ignored")
+	}
+	w := doRequest(t, a.handlePassword, "POST", "/admin/api/password", map[string]string{"current_password": "env-password", "new_password": "changed"})
+	if w.Code != 400 {
+		t.Fatal("env-managed password changed")
 	}
 }

@@ -1,0 +1,254 @@
+{
+  "scope": "historical plaintext logs only; counts are log mentions, not unique requests or current capabilities",
+  "privacy": "fixed allowlisted metadata only; no original lines or credential values exported",
+  "scanned_files": 303,
+  "skipped_large_files": 0,
+  "endpoints": {
+    "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param": {
+      "mentions": 32,
+      "send_records": 8,
+      "methods": {
+        "POST": 8
+      },
+      "response_statuses": {},
+      "contexts": {}
+    },
+    "https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param": {
+      "mentions": 8,
+      "send_records": 0,
+      "methods": {},
+      "response_statuses": {},
+      "contexts": {}
+    },
+    "https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat": {
+      "mentions": 3,
+      "send_records": 1,
+      "methods": {
+        "POST": 1
+      },
+      "response_statuses": {
+        "200": 1
+      },
+      "contexts": {
+        "generate_session_title_and_icon": 3
+      }
+    },
+    "https://trae-api-cn.mchost.guru/api/agent/v3/workflow/start": {
+      "mentions": 9,
+      "send_records": 3,
+      "methods": {
+        "POST": 3
+      },
+      "response_statuses": {
+        "200": 3
+      },
+      "contexts": {}
+    }
+  },
+  "header_names_observed_in_add_header": [
+    "request-traffic-type",
+    "x-app-id",
+    "x-app-version",
+    "x-app-version-code",
+    "x-custom-trace-id",
+    "x-device-brand",
+    "x-device-cpu",
+    "x-device-id",
+    "x-device-type",
+    "x-flow-traceparent",
+    "x-ide-version",
+    "x-ide-version-code",
+    "x-ide-version-type",
+    "x-machine-id",
+    "x-os-version"
+  ],
+  "version_header_mentions": [
+    {
+      "ide_version": "0.1.41",
+      "ide_version_code": "20260728",
+      "mentions": 37
+    }
+  ],
+  "batch_detail_functions_observed": [
+    "assistant",
+    "builder",
+    "solo_agent_lite",
+    "solo_agent_remote",
+    "solo_coder",
+    "solo_design_lite",
+    "solo_design_remote",
+    "solo_work_lite",
+    "solo_work_remote"
+  ],
+  "custom_model_field_names": [
+    "ab_versions",
+    "ak",
+    "application_config",
+    "auth_type",
+    "base_url",
+    "config_name",
+    "config_source",
+    "context_window_sizes",
+    "custom_model_type",
+    "display_model_name",
+    "display_options",
+    "encrypted_model_params",
+    "extra_config",
+    "function_extra_config",
+    "is_preset",
+    "max_tokens",
+    "max_turn",
+    "model_name",
+    "multimodal",
+    "persist_meta",
+    "prompt_max_tokens",
+    "prompt_set",
+    "provider",
+    "raw_chat_function",
+    "reasoning_effort",
+    "region",
+    "session_token",
+    "sk",
+    "support_read_image",
+    "toolcall_history_max_tokens",
+    "use_remote_service",
+    "user_custom_hyper_params"
+  ],
+  "event_debug_type_mentions": {
+    "CloudContextUsageEvent": 1,
+    "TimingCostOriginEvent": 12,
+    "UnknownEvent": 4
+  },
+  "evidence": [
+    {
+      "file": "20260910T164338/Modular/ai-agent_0_1789029818384_stdout.log",
+      "sha256": "f99920a900659d0a779409b89083f6e9009469b98e020cf37940879250d9fc7c",
+      "locations": [
+        {
+          "line": 627,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 628,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 631,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 638,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 639,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 641,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 880,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 880,
+          "kind": "endpoint",
+          "endpoint": "https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 1922,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 1922,
+          "kind": "endpoint",
+          "endpoint": "https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 4757,
+          "kind": "custom_model_shape"
+        },
+        {
+          "line": 4859,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        }
+      ]
+    },
+    {
+      "file": "20260910T165745/Modular/ai-agent_0_1789030665673_stdout.log",
+      "sha256": "3301daa88e805e906113db14482057464f1df72c2d8bae771256e35dae0d9ff1",
+      "locations": [
+        {
+          "line": 365,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 366,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 396,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 720,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 720,
+          "kind": "endpoint",
+          "endpoint": "https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 1979,
+          "kind": "custom_model_shape"
+        },
+        {
+          "line": 1988,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 1989,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 1991,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 2117,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 2117,
+          "kind": "endpoint",
+          "endpoint": "https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param"
+        },
+        {
+          "line": 2431,
+          "kind": "endpoint",
+          "endpoint": "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param"
+        }
+      ]
+    }
+  ]
+}

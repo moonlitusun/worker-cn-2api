@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"qoder2api/store"
-	"qoder2api/workbuddy"
+	"worker-cn-2api/store"
+	"worker-cn-2api/workbuddy"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -30,8 +30,8 @@ func TestHealthHandler(t *testing.T) {
 	if resp["status"] != "ok" {
 		t.Errorf("expected status ok, got %v", resp["status"])
 	}
-	if resp["has_pat"] != false {
-		t.Errorf("expected has_pat=false without PAT, got %v", resp["has_pat"])
+	if _, ok := resp["has_pat"]; ok {
+		t.Errorf("has_pat must be absent, got %v", resp["has_pat"])
 	}
 	if resp["has_workbuddy"] != true {
 		t.Errorf("expected has_workbuddy=true, got %v", resp["has_workbuddy"])
@@ -40,13 +40,6 @@ func TestHealthHandler(t *testing.T) {
 		t.Errorf("expected default chat timeout %d, got %v", store.DefaultChatTimeoutSeconds, resp["chat_timeout_seconds"])
 	}
 
-	s.SetPAT("pat-x")
-	w = httptest.NewRecorder()
-	h(w, httptest.NewRequest("GET", "/health", nil))
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["has_pat"] != true {
-		t.Errorf("expected has_pat=true with PAT, got %v", resp["has_pat"])
-	}
 }
 
 func TestHealthHandlerMethodNotAllowed(t *testing.T) {
@@ -61,36 +54,6 @@ func TestHealthHandlerMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestUnifiedModelsHandler(t *testing.T) {
-	s, err := store.New(t.TempDir() + "/data.json")
-	if err != nil {
-		t.Fatalf("store.New: %v", err)
-	}
-	provider := newBridgeProvider(s)
-	wbCfg := &workbuddy.Config{Token: "test-wb"}
-	wbBridge := workbuddy.NewBridge(wbCfg)
-
-	h := makeUnifiedModelsHandler(s, provider, wbBridge)
-	w := httptest.NewRecorder()
-	h(w, httptest.NewRequest("GET", "/v1/models", nil))
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	// Must contain Qoder default models
-	if !strings.Contains(body, "Qwen3.7-Max") {
-		t.Error("models list must contain Qoder model Qwen3.7-Max")
-	}
-	// Must contain WorkBuddy models
-	if !strings.Contains(body, "deepseek-v3") {
-		t.Error("models list must contain WorkBuddy model deepseek-v3")
-	}
-	if !strings.Contains(body, "hunyuan-code") {
-		t.Error("models list must contain WorkBuddy model hunyuan-code")
-	}
-}
-
 func TestUnifiedChatRejectsConflictingReasoningBeforeRouting(t *testing.T) {
 	s, err := store.New(t.TempDir() + "/data.json")
 	if err != nil {
@@ -99,7 +62,7 @@ func TestUnifiedChatRejectsConflictingReasoningBeforeRouting(t *testing.T) {
 	if _, err := s.AddKey("test-key", "parameters"); err != nil {
 		t.Fatal(err)
 	}
-	handler := makeUnifiedChatHandler(s, nil, nil, nil)
+	handler := makeChatHandler(s, nil, nil)
 	for _, model := range []string{"DeepSeek-Flash", "workbuddy/deepseek-r1"} {
 		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"`+model+`","thinking":{"type":"disabled"},"reasoning_effort":"high"}`))
 		req.Header.Set("Authorization", "Bearer test-key")
