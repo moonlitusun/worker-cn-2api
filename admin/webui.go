@@ -548,7 +548,7 @@ td.num, th.num { text-align: right; }
 }
 .row > .field { flex: 1; }
 
-input[type="text"], input[type="number"], input[type="password"] {
+input[type="text"], input[type="number"], input[type="password"], input[type="search"] {
   width: 100%;
   padding: 10px 13px;
   background: var(--surface);
@@ -560,7 +560,7 @@ input[type="text"], input[type="number"], input[type="password"] {
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:focus {
+input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:focus, input[type="search"]:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
@@ -744,7 +744,7 @@ input[readonly] {
   .stat-value { font-size: 22px; }
   .chart-col, .chart-axis-item { min-width: 12px; }
   /* Prevent iOS Safari auto-zoom on focus (requires >=16px). */
-  input[type="text"], input[type="number"], input[type="password"] { font-size: 16px; }
+  input[type="text"], input[type="number"], input[type="password"], input[type="search"] { font-size: 16px; }
 }
 
 /* Provider diagnostics and model details */
@@ -760,7 +760,6 @@ input[readonly] {
 .provider-actions .btn { white-space:normal; }
 .provider-select, .field select { min-width:0;max-width:100%;padding:9px 12px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;font:inherit; }
 .field select { width:100%; }
-.provider-select { flex:1; }
 .card-head .badge { flex-shrink:0;white-space:nowrap; }
 .badge.warn { background:var(--warning-soft);color:var(--warning);border:1px solid var(--warning-border); }
 .model-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px; }
@@ -771,9 +770,12 @@ input[readonly] {
 .model-card-meta { display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px; }
 .model-tag { display:inline-flex;align-items:center;font-size:11px;padding:2px 7px;border-radius:6px;background:var(--surface-2);color:var(--muted);border:1px solid var(--border);white-space:nowrap; }
 .model-tag.ok { background:var(--success-soft);color:var(--success);border-color:var(--success-border); }
-.model-toolbar { display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px; }
-.model-toolbar input { flex:1;min-width:150px; }
-@media(max-width:600px) { .provider-meta { grid-template-columns:1fr; } .provider-actions .provider-select { flex-basis:100%; } .model-grid { grid-template-columns:minmax(0,1fr); } .provider-actions .btn { flex:1; } }
+.model-toolbar { display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm); }
+.model-toolbar .provider-select { flex:0 0 130px;min-width:130px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;cursor:pointer; }
+.model-toolbar input[type="search"] { flex:1;padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;box-sizing:border-box; }
+.model-toolbar input[type="search"]:focus { border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-glow); }
+.model-count-badge { font-size:12px;color:var(--muted);white-space:nowrap;padding:0 6px; }
+@media(max-width:600px) { .provider-meta { grid-template-columns:1fr; } .provider-actions .provider-select { flex-basis:100%; } .model-grid { grid-template-columns:minmax(0,1fr); } .provider-actions .btn { flex:1; } .model-toolbar { flex-wrap:wrap; } .model-toolbar .provider-select { flex:1 1 100%; } .model-toolbar input[type="search"] { flex:1 1 100%; } }
 </style>
 </head>
 <body>
@@ -1047,8 +1049,8 @@ input[readonly] {
         <div class="card-body">
           <div class="model-toolbar">
             <select id="modelProviderFilter" class="provider-select" aria-label="模型渠道筛选" onchange="renderModels()"><option value="">全部渠道</option><option value="qoder-cn">Qoder CN</option><option value="trae-cn">Trae CN</option><option value="workbuddy-cn">WorkBuddy CN</option></select>
-            <input id="modelSearch" type="search" aria-label="搜索模型" placeholder="搜索名称或模型 ID" oninput="renderModels()">
-            <span id="modelCount" class="hint"></span>
+            <input id="modelSearch" type="search" aria-label="搜索模型" placeholder="搜索模型名称或 ID…" oninput="renderModels()">
+            <span id="modelCount" class="model-count-badge"></span>
             <button class="btn secondary sm" type="button" onclick="loadModels()">重新加载</button>
           </div>
           <div id="modelProviderErrors" role="status"></div>
