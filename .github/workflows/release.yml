@@ -195,6 +195,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: worker-cn-2api-*
           path: artifacts
           merge-multiple: true
 

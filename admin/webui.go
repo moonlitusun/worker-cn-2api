@@ -763,12 +763,16 @@ input[readonly] {
 .provider-select { flex:1; }
 .card-head .badge { flex-shrink:0;white-space:nowrap; }
 .badge.warn { background:var(--warning-soft);color:var(--warning);border:1px solid var(--warning-border); }
+.model-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px; }
+.model-item { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);transition:border-color 0.15s,box-shadow 0.15s; }
+.model-item:hover { border-color:var(--border-strong);box-shadow:var(--shadow); }
 .model-card-content { min-width:0;flex:1; }
-.model-card-title { overflow-wrap:anywhere;font-size:13px; }
-.model-card-description { margin-top:8px;font-size:12px;color:var(--muted);line-height:1.7;overflow-wrap:anywhere; }
+.model-card-title { overflow-wrap:anywhere;font-size:13.5px;font-weight:600;color:var(--text);line-height:1.4; }
+.model-card-meta { display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px; }
+.model-tag { display:inline-flex;align-items:center;font-size:11px;padding:2px 7px;border-radius:6px;background:var(--surface-2);color:var(--muted);border:1px solid var(--border);white-space:nowrap; }
+.model-tag.ok { background:var(--success-soft);color:var(--success);border-color:var(--success-border); }
 .model-toolbar { display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px; }
 .model-toolbar input { flex:1;min-width:150px; }
-.model-item { align-items:flex-start; }
 @media(max-width:600px) { .provider-meta { grid-template-columns:1fr; } .provider-actions .provider-select { flex-basis:100%; } .model-grid { grid-template-columns:minmax(0,1fr); } .provider-actions .btn { flex:1; } }
 </style>
 </head>
@@ -1048,7 +1052,7 @@ input[readonly] {
             <button class="btn secondary sm" type="button" onclick="loadModels()">重新加载</button>
           </div>
           <div id="modelProviderErrors" role="status"></div>
-          <p class="hint">能力信息以目录声明为准；未声明的能力需实际验证，模型可见不代表套餐一定可调用。</p>
+          <p class="hint">模型可用性以账号套餐及各平台上游实际权限为准。</p>
           <div id="modelsList" class="model-grid"></div>
         </div>
       </div>
@@ -1624,27 +1628,54 @@ function loadModels() {
     renderModels();
   }).catch(function(e) { document.getElementById('modelCount').textContent = '加载失败'; showToast(e.message, 'error'); });
 }
+function formatTokens(n) {
+  if (!n) return '';
+  if (n >= 1000000) return (n / 1000000).toFixed(0) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
+  return Number(n).toLocaleString('zh-CN');
+}
+
 function renderModels() {
   var provider = document.getElementById('modelProviderFilter').value;
   var search = document.getElementById('modelSearch').value.trim().toLowerCase();
-  var list = cachedModels.filter(function(item) { return (!provider || item.provider === provider) && (!search || ((item.name || '') + ' ' + (item.display_name || '')).toLowerCase().includes(search)); });
+  var list = cachedModels.filter(function(item) {
+    return (!provider || item.provider === provider) &&
+           (!search || ((item.name || '') + ' ' + (item.display_name || '')).toLowerCase().includes(search));
+  });
   var grid = document.getElementById('modelsList'); grid.innerHTML = '';
   document.getElementById('modelCount').textContent = list.length + ' / ' + cachedModels.length + ' 个模型';
   if (!list.length) { var empty = document.createElement('p'); empty.className = 'hint'; empty.textContent = '没有符合条件的模型'; grid.appendChild(empty); return; }
   list.forEach(function(item) {
-    var name = item.name; var card = document.createElement('div'); card.className = 'model-item';
+    var name = item.name;
+    var card = document.createElement('div'); card.className = 'model-item';
     var content = document.createElement('div'); content.className = 'model-card-content';
     var title = document.createElement('div'); title.className = 'model-card-title mono'; title.textContent = name; content.appendChild(title);
-    var badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = providerLabel(item.provider); content.appendChild(badge);
-    var lines = [];
-    if (item.display_name && item.display_name !== name) lines.push(item.display_name);
-    lines.push('上下文：' + (item.context_window ? Number(item.context_window).toLocaleString('zh-CN') + ' tokens' : '未声明'));
-    lines.push('最大输出：' + (item.max_output_tokens ? Number(item.max_output_tokens).toLocaleString('zh-CN') + ' tokens' : '未声明'));
-    lines.push('函数工具：' + (item.supports_tools === true ? '目录声明支持' : item.supports_tools === false ? '目录声明不支持' : '模型能力待验证'));
-    if (item.provider === 'trae-cn') lines.push('文本聊天通道 · 不支持图片输入');
-    var detail = document.createElement('div'); detail.className = 'model-card-description';
-    lines.forEach(function(line) { var row = document.createElement('div'); row.textContent = line; detail.appendChild(row); }); content.appendChild(detail); card.appendChild(content);
-    var copy = document.createElement('button'); copy.className = 'btn secondary sm'; copy.type = 'button'; copy.textContent = '复制'; copy.setAttribute('aria-label', '复制模型 ' + name); copy.addEventListener('click', function() { copyText(name); }); card.appendChild(copy); grid.appendChild(card);
+
+    var meta = document.createElement('div'); meta.className = 'model-card-meta';
+    var provBadge = document.createElement('span'); provBadge.className = 'badge'; provBadge.textContent = providerLabel(item.provider); meta.appendChild(provBadge);
+
+    var stripped = name.replace(/^[^/]+\//, '');
+    if (item.display_name && item.display_name !== name && item.display_name !== stripped) {
+      var nameTag = document.createElement('span'); nameTag.className = 'model-tag'; nameTag.textContent = item.display_name; meta.appendChild(nameTag);
+    }
+    if (item.context_window && item.context_window > 0) {
+      var ctxTag = document.createElement('span'); ctxTag.className = 'model-tag'; ctxTag.textContent = '上下文 ' + formatTokens(item.context_window); meta.appendChild(ctxTag);
+    }
+    if (item.max_output_tokens && item.max_output_tokens > 0) {
+      var outTag = document.createElement('span'); outTag.className = 'model-tag'; outTag.textContent = '输出 ' + formatTokens(item.max_output_tokens); meta.appendChild(outTag);
+    }
+    if (item.supports_tools === true) {
+      var toolTag = document.createElement('span'); toolTag.className = 'model-tag ok'; toolTag.textContent = '工具调用'; meta.appendChild(toolTag);
+    }
+    if (item.provider === 'trae-cn') {
+      var textTag = document.createElement('span'); textTag.className = 'model-tag'; textTag.textContent = '文本对话'; meta.appendChild(textTag);
+    }
+
+    content.appendChild(meta);
+    card.appendChild(content);
+
+    var copy = document.createElement('button'); copy.className = 'btn secondary sm'; copy.type = 'button'; copy.textContent = '复制'; copy.setAttribute('aria-label', '复制模型 ' + name); copy.addEventListener('click', function() { copyText(name); }); card.appendChild(copy);
+    grid.appendChild(card);
   });
 }
 
