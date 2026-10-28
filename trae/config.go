@@ -3,6 +3,7 @@ package trae
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -18,7 +19,9 @@ type Config struct {
 	RefreshToken, ExpiresAt, ClientID, AuthURL string
 }
 
-func ResolveConfig(token, userID string) Config {
+func ResolveConfig(token, userID string) Config { return resolveConfig(token, userID, detectDesktop) }
+
+func resolveConfig(token, userID string, desktop func() (Config, error)) Config {
 	if token == "" {
 		token = os.Getenv("WORKER_TRAE_TOKEN")
 	}
@@ -29,8 +32,9 @@ func ResolveConfig(token, userID string) Config {
 		DeviceID: os.Getenv("WORKER_TRAE_DEVICE_ID"), MachineID: os.Getenv("WORKER_TRAE_MACHINE_ID"),
 		BaseURL: os.Getenv("WORKER_TRAE_BASE_URL"), Version: os.Getenv("WORKER_TRAE_VERSION"), VersionCode: os.Getenv("WORKER_TRAE_VERSION_CODE"),
 		RefreshToken: os.Getenv("WORKER_TRAE_REFRESH_TOKEN"), ExpiresAt: os.Getenv("WORKER_TRAE_EXPIRES_AT"), ClientID: os.Getenv("WORKER_TRAE_CLIENT_ID"), AuthURL: os.Getenv("WORKER_TRAE_AUTH_URL")}
-	if c.Token == "" {
-		if local, err := detectDesktop(); err == nil {
+	importDesktop, _ := strconv.ParseBool(os.Getenv("WORKER_IMPORT_DESKTOP_CREDENTIALS"))
+	if c.Token == "" && importDesktop {
+		if local, err := desktop(); err == nil {
 			c.Token = local.Token
 			c.UserID = local.UserID
 			c.RefreshToken = local.RefreshToken

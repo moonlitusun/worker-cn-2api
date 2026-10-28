@@ -757,7 +757,8 @@ input[readonly] {
 .provider-operation:last-child { border-bottom:0; }
 .provider-operation.failed { color:var(--danger); }
 .provider-actions { display:flex;gap:8px;flex-wrap:wrap;margin:14px 0;align-items:center; }
-.provider-actions .btn { white-space:normal; }
+.provider-actions .btn { height:38px;min-height:38px;padding:0 12px;white-space:nowrap;line-height:20px; }
+.provider-actions .provider-select { height:38px;min-height:38px;line-height:20px;padding:0 12px;font-size:12.5px; }
 .provider-select, .field select { min-width:0;max-width:100%;padding:9px 12px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;font:inherit; }
 .field select { width:100%; }
 .card-head .badge { flex-shrink:0;white-space:nowrap; }

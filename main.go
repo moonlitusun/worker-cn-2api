@@ -183,8 +183,10 @@ func main() {
 	adminInst.RegisterRoutes(mux)
 
 	addr := host + ":" + strconv.Itoa(port)
-	log.Printf("[bridge] listening http://%s/v1/chat/completions", addr)
-	log.Printf("[admin]  http://%s/admin", addr)
+	for _, displayAddr := range startupAddresses(host, port) {
+		log.Printf("[bridge] listening http://%s/v1/chat/completions", displayAddr)
+		log.Printf("[admin]  http://%s/admin", displayAddr)
+	}
 
 	// Timeouts: ReadHeaderTimeout/IdleTimeout harden against slowloris-style
 	// resource exhaustion. WriteTimeout is intentionally unset so that

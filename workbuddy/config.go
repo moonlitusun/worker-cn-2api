@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -35,8 +36,12 @@ type Config struct {
 }
 
 // ResolveConfig resolves the configuration using environment variables,
-// explicit overrides, or falling back to local desktop client credentials.
+// explicit overrides. Desktop credential import requires an explicit opt-in.
 func ResolveConfig(explicitToken string) *Config {
+	return resolveConfig(explicitToken, detectLocalDesktopAuth)
+}
+
+func resolveConfig(explicitToken string, desktop func() (*DesktopAuthInfo, error)) *Config {
 	token := strings.TrimSpace(explicitToken)
 	if token == "" {
 		token = os.Getenv("WORKER_WORKBUDDY_TOKEN")
@@ -46,9 +51,10 @@ func ResolveConfig(explicitToken string) *Config {
 	}
 
 	userID := ""
-	if token == "" {
-		// Attempt to read from local desktop client config file
-		if info, err := detectLocalDesktopAuth(); err == nil && info != nil {
+	importDesktop, _ := strconv.ParseBool(os.Getenv("WORKER_IMPORT_DESKTOP_CREDENTIALS"))
+	if token == "" && importDesktop {
+		// Read the current user's desktop credentials only when explicitly enabled.
+		if info, err := desktop(); err == nil && info != nil {
 			token = info.AuthToken
 			userID = info.UserID
 		}

@@ -54,6 +54,8 @@ docker compose up -d
 
 配置了 `WORKER_ADMIN_PASSWORD` 时，管理密码由环境变量管理；修改 `.env` 后执行 `docker compose up -d` 生效，不能在管理页面修改。
 
+分发安装包时仅发送 EXE 或 Release 压缩包，不要包含个人的 `data.json`、`data/` 或 `.env`。程序不内置账号凭据。
+
 账号配置、API Key 和统计保存在部署目录的 `data/` 中，重建容器后仍会保留。请妥善保存 `.env` 和 `data/`，不要公开分享。桌面账号凭证不会自动同步到 Docker；也可通过 `WORKER_WORKBUDDY_TOKEN` / `WORKER_TRAE_TOKEN` 环境变量配置渠道。
 
 ### 3. 查看日志与更新
@@ -144,9 +146,9 @@ WorkBuddy 上游始终使用 SSE，客户端非流式请求会在服务端聚合
 - 当前不支持图片、Remote/workflow Agent、Responses API、`reasoning_effort`、`thinking`、`response_format` 或 `parallel_tool_calls` 控制；这些请求明确返回 400，不暗中换模型或通道。上游模型仍可自然产生推理内容。
 - 每个 Bridge 采用一个并发槽位与 15 秒排队上限；这是保守的本地调度策略，不代表实测账号并发上限。流建立后每 3 秒发送心跳。
 
-本机运行时，未配置 Token 会依次尝试读取 `TRAE SOLO CN`、`Trae-CN` 的 `User/globalStorage/storage.json`，仅支持已验证的 `tc` AES 凭证格式。macOS 根目录为 `~/Library/Application Support`，Windows 为 `%APPDATA%`，Linux 为 `~/.config`；不改写桌面客户端文件。
+首次启动默认不读取桌面客户端登录信息，各渠道由使用者自行配置。仅当明确设置 `WORKER_IMPORT_DESKTOP_CREDENTIALS=true` 时，未配置 Token 才会依次尝试读取 `TRAE SOLO CN`、`Trae-CN` 的 `User/globalStorage/storage.json`，仅支持已验证的 `tc` AES 凭证格式。macOS 根目录为 `~/Library/Application Support`，Windows 为 `%APPDATA%`，Linux 为 `~/.config`；不改写桌面客户端文件。
 
-包含 RefreshToken 的会话在到期前一分钟自动刷新，并把轮换会话写入本服务的 `data.json`（文件权限 0600）。过期时间来自会话字段或 JWT `exp`。手动配置只有 Token 时不自动刷新；刷新失败需重新登录或更新凭据。管理页面可选择 Trae Code CN / SOLO CN 产品类型并填入可选刷新凭据。清空渠道后本次运行立即停用；重启后仍会按环境变量和桌面凭据进行自动发现。
+包含 RefreshToken 的会话在到期前一分钟自动刷新，并把轮换会话写入本服务的 `data.json`（文件权限 0600）。过期时间来自会话字段或 JWT `exp`。手动配置只有 Token 时不自动刷新；刷新失败需重新登录或更新凭据。管理页面可选择 Trae Code CN / SOLO CN 产品类型并填入可选刷新凭据。清空渠道后本次运行立即停用；重启后仍读取显式配置的环境变量；只有启用 `WORKER_IMPORT_DESKTOP_CREDENTIALS` 时才会自动读取桌面凭据。
 
 | 变量 | 默认值 / 说明 |
 |---|---|
