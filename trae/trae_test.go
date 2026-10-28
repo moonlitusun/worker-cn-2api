@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"worker-cn-2api/stats"
 )
 
 // Synthetic data with the public captured event schema; no account data.
@@ -88,7 +89,7 @@ func TestBridgeStreamingAndSync(t *testing.T) {
 			t.Errorf("bad upstream body: %v", m)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, fixture)
+		io.WriteString(w, "event: token_usage\ndata: {\"prompt_tokens\":1,\"completion_tokens\":1}\n\n"+fixture)
 	}))
 	defer srv.Close()
 	b := NewBridge(Config{Token: "secret-token", BaseURL: srv.URL})
@@ -96,8 +97,18 @@ func TestBridgeStreamingAndSync(t *testing.T) {
 		in := body(t, `{"model":"trae/model","messages":[{"role":"user","content":"hi"}],"stream_options":{"include_usage":true}}`)
 		in["stream"] = stream
 		w := httptest.NewRecorder()
-		if err := b.HandleChat(context.Background(), w, in); err != nil {
+		recorder := stats.NewRecorder(nil)
+		if err := b.HandleChat(context.Background(), w, in, recorder); err != nil {
 			t.Fatal(err)
+		}
+		for _, provider := range []string{"", "trae"} {
+			report := recorder.Report(provider)
+			if report.PromptTokens != 3 || report.CompletionTokens != 5 {
+				t.Fatalf("usage not recorded once for %q: %+v", provider, report)
+			}
+		}
+		if recorder.Report("workbuddy").PromptTokens != 0 {
+			t.Fatal("usage leaked to other channel")
 		}
 		if stream {
 			if !strings.Contains(w.Body.String(), "data: [DONE]") || !strings.Contains(w.Body.String(), `"total_tokens":8`) {
@@ -260,5 +271,38 @@ func TestInterleavedToolIDsWithoutIndices(t *testing.T) {
 	}
 	if len(c.Tools) != 2 || c.Tools[0].Arguments != "{}" || c.Tools[1].Arguments != "{}" {
 		t.Fatal("tool fragments crossed calls")
+	}
+}
+
+func TestIncompleteUsageIsNotRecorded(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: token_usage\ndata: {\"prompt_tokens\":5,\"completion_tokens\":8}\n\n")
+		}))
+		b := NewBridge(Config{Token: "test", BaseURL: srv.URL})
+		rec := stats.NewRecorder(nil)
+		err := b.HandleChat(context.Background(), httptest.NewRecorder(), map[string]any{"model": "trae/glm", "stream": stream, "messages": []any{map[string]any{"role": "user", "content": "hi"}}}, rec)
+		srv.Close()
+		if err == nil || rec.Report().PromptTokens != 0 || rec.Report("trae").PromptTokens != 0 {
+			t.Fatal("incomplete stream was billed", err)
+		}
+	}
+}
+
+func TestProgressNoticeAllowsPlainTextWithoutWeakeningOutputValidation(t *testing.T) {
+	input := "event: progress_notice\ndata: Processing_model\n\nevent: progress_notice\ndata: \"Queued\"\n\nevent: output\ndata: {\"response\":\"OK\"}\n\n"
+	count := 0
+	if err := ReadEvents(strings.NewReader(input), func(e Event) error {
+		count++
+		if e.Name != "output" {
+			t.Fatal(e.Name)
+		}
+		return nil
+	}); err != nil || count != 1 {
+		t.Fatal(count, err)
+	}
+	if err := ReadEvents(strings.NewReader("event: output\ndata: malformed\n\n"), func(Event) error { return nil }); err == nil {
+		t.Fatal("malformed completion event accepted")
 	}
 }

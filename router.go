@@ -32,7 +32,11 @@ func writeWorkBuddyError(w http.ResponseWriter, err error) {
 		if qe.Status == 429 {
 			w.Header().Set("Retry-After", "3")
 		}
-		writeJSONError(w, qe.Status, "qoder_error", qe.Message)
+		status := qe.Status
+		if normalized, kind := classifyRequestFailure(err); kind == "timeout" {
+			status = normalized
+		}
+		writeJSONError(w, status, "qoder_error", qe.Message)
 		return
 	}
 	var traeReported *trae.ReportedError
@@ -44,14 +48,18 @@ func writeWorkBuddyError(w http.ResponseWriter, err error) {
 		if traeErr.Status == 429 {
 			w.Header().Set("Retry-After", "3")
 		}
-		writeJSONError(w, traeErr.Status, "trae_error", traeErr.Error())
+		status := traeErr.Status
+		if normalized, kind := classifyRequestFailure(err); kind == "timeout" {
+			status = normalized
+		}
+		writeJSONError(w, status, "trae_error", traeErr.Error())
 		return
 	}
 	var reported *workbuddy.ReportedError
 	if errors.As(err, &reported) {
 		return
 	}
-	status := http.StatusBadGateway
+	status, _ := classifyRequestFailure(err)
 	var request *workbuddy.RequestError
 	if errors.As(err, &request) {
 		writeJSONError(w, 400, "invalid_request_error", err.Error())
@@ -124,15 +132,24 @@ func makeChatHandler(st *store.Store, b *workbuddy.Bridge, rec *stats.Recorder, 
 				return
 			}
 		}
+		started := time.Now()
+		secrets := requestTextSecrets(body["messages"])
+		secrets = append(secrets, token, st.GetQoderPAT(), st.GetWorkBuddyToken())
+		if b != nil {
+			secrets = append(secrets, b.Config().Token)
+		}
+		if tb != nil {
+			c := tb.Config()
+			secrets = append(secrets, c.Token, c.RefreshToken)
+		}
 		if isTrae {
 			if tb == nil {
+				recordChatResult(rec, "trae", model, started, &workbuddy.UpstreamError{Status: 503, Message: "Trae CN is not configured"}, secrets, r.Context())
 				writeJSONError(w, 503, "trae_error", "Trae CN is not configured")
 				return
 			}
-			err := tb.HandleChat(r.Context(), w, body)
-			if rec != nil {
-				rec.Record(model, err == nil)
-			}
+			err := tb.HandleChat(r.Context(), w, body, rec)
+			recordChatResult(rec, "trae", model, started, err, secrets, r.Context())
 			if err != nil {
 				writeWorkBuddyError(w, err)
 			}
@@ -140,26 +157,24 @@ func makeChatHandler(st *store.Store, b *workbuddy.Bridge, rec *stats.Recorder, 
 		}
 		if isQoder {
 			if qb == nil {
+				recordChatResult(rec, "qoder", model, started, &workbuddy.UpstreamError{Status: 503, Message: "Qoder CN is not configured"}, secrets, r.Context())
 				writeJSONError(w, 503, "qoder_error", "Qoder CN is not configured")
 				return
 			}
 			err := qb.HandleChat(r.Context(), w, body, rec)
-			if rec != nil {
-				rec.Record(model, err == nil)
-			}
+			recordChatResult(rec, "qoder", model, started, err, secrets, r.Context())
 			if err != nil {
 				writeWorkBuddyError(w, err)
 			}
 			return
 		}
 		if b == nil || b.Config().Token == "" {
+			recordChatResult(rec, "workbuddy", model, started, &workbuddy.UpstreamError{Status: 503, Message: "WorkBuddy CN auth token is not configured"}, secrets, r.Context())
 			writeJSONError(w, 503, "workbuddy_error", "WorkBuddy CN auth token is not configured")
 			return
 		}
-		err := b.HandleChat(r.Context(), w, body)
-		if rec != nil {
-			rec.Record(model, err == nil)
-		}
+		err := b.HandleChat(r.Context(), w, body, rec)
+		recordChatResult(rec, "workbuddy", model, started, err, secrets, r.Context())
 		if err != nil {
 			writeWorkBuddyError(w, err)
 		}

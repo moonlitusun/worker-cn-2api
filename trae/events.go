@@ -27,9 +27,17 @@ func ReadEvents(r io.Reader, emit func(Event) error) error {
 			size = 0
 			return nil
 		}
+		// Current IDE models send non-JSON progress notices while queued.
+		// They carry no completion data and must not fail a valid text stream.
+		if name == "progress_notice" {
+			name = ""
+			data = nil
+			size = 0
+			return nil
+		}
 		var obj map[string]any
 		if err := json.Unmarshal([]byte(strings.Join(data, "\n")), &obj); err != nil || obj == nil {
-			return fmt.Errorf("invalid Trae SSE JSON")
+			return fmt.Errorf("invalid Trae SSE JSON for event %q", name)
 		}
 		e := Event{Name: name, Data: obj}
 		name = ""

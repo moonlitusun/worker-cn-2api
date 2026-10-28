@@ -77,6 +77,7 @@ func (a *Admin) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/api/trae", a.requireAuth(a.handleTrae))
 	mux.HandleFunc("/admin/api/qoder", a.requireAuth(a.handleQoder))
 	mux.HandleFunc("/admin/api/pat", a.requireAuth(a.handleQoder))
+	mux.HandleFunc("/admin/api/channel/test", a.requireAuth(a.handleChannelTest))
 	mux.HandleFunc("/admin/api/trae/test", a.requireAuth(a.handleTraeTest))
 	mux.HandleFunc("/admin/api/trae/accounts", a.requireAuth(a.handleTraeAccounts))
 	mux.HandleFunc("/admin/api/models", a.requireAuth(a.handleModels))
@@ -622,9 +623,15 @@ func (a *Admin) handleTrae(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body.Token = strings.TrimSpace(body.Token)
+		for _, prefix := range []string{"Cloud-IDE-JWT ", "Bearer "} {
+			if len(body.Token) >= len(prefix) && strings.EqualFold(body.Token[:len(prefix)], prefix) {
+				body.Token = strings.TrimSpace(body.Token[len(prefix):])
+				break
+			}
+		}
 		body.UserID = strings.TrimSpace(body.UserID)
 		if body.Token == "" || strings.ContainsAny(body.Token, " \t\r\n") || strings.ContainsAny(body.UserID, "\r\n") {
-			writeJSONError(w, 400, "请输入有效的 Cloud-IDE-JWT 令牌（不带前缀）")
+			writeJSONError(w, 400, "请输入有效的 Trae 登录令牌（JWT 或 trae-lt-）")
 			return
 		}
 		if body.ClientID != "" && body.ClientID != "ono9krqynydwx5" && body.ClientID != "en1oxy7wnw8j9n" {
@@ -762,7 +769,7 @@ func (a *Admin) handleModels(w http.ResponseWriter, r *http.Request) {
 		} else {
 			for _, m := range catalog {
 				id := "trae/" + m.ID
-				entries = append(entries, modelEntry{Name: id, Provider: "trae-cn", DisplayName: m.Name, ContextWindow: m.ContextWindow, Channel: trae.Function})
+				entries = append(entries, modelEntry{Name: id, Provider: "trae-cn", DisplayName: m.Name, ContextWindow: m.ContextWindow, Channel: m.Channel})
 				ids = append(ids, id)
 			}
 		}
@@ -781,7 +788,12 @@ func (a *Admin) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, stats.Report{})
 		return
 	}
-	writeJSON(w, 200, a.stats.Report())
+	provider := r.URL.Query().Get("provider")
+	if provider != "" && provider != "qoder" && provider != "workbuddy" && provider != "trae" {
+		writeJSONError(w, 400, "未知渠道")
+		return
+	}
+	writeJSON(w, 200, a.stats.Report(provider))
 }
 
 // --- WebUI ---

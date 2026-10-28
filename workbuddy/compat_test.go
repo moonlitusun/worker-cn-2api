@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 	"worker-cn-2api/auth"
+	"worker-cn-2api/stats"
 )
 
 func TestCNCompatibility(t *testing.T) {
@@ -33,14 +34,25 @@ func TestCNCompatibility(t *testing.T) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprint(w, "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n")
 				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
+				fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n\n")
 				fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n\ndata: [DONE]\n\n")
 			}))
 			defer srv.Close()
 			b := NewBridge(&Config{Token: "test", Endpoint: srv.URL + "/v2/chat/completions"})
 			req := map[string]interface{}{"model": "workbuddy/glm-5.3", "stream": stream, "messages": []interface{}{map[string]interface{}{"role": "developer", "content": "help"}}, "tools": []interface{}{map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "read"}}}}
 			w := httptest.NewRecorder()
-			if err := b.HandleChat(context.Background(), w, req); err != nil {
+			recorder := stats.NewRecorder(nil)
+			if err := b.HandleChat(context.Background(), w, req, recorder); err != nil {
 				t.Fatal(err)
+			}
+			for _, provider := range []string{"", "workbuddy"} {
+				report := recorder.Report(provider)
+				if report.PromptTokens != 5 || report.CompletionTokens != 8 {
+					t.Fatalf("usage not recorded once for %q: %+v", provider, report)
+				}
+			}
+			if recorder.Report("trae").PromptTokens != 0 {
+				t.Fatal("usage attributed to another channel")
 			}
 			body := w.Body.String()
 			if !strings.Contains(body, "call_1") || !strings.Contains(body, `"finish_reason":"tool_calls"`) || !strings.Contains(body, `"total_tokens":13`) {
@@ -186,5 +198,33 @@ func TestUpstreamTimeouts(t *testing.T) {
 				t.Fatalf("configured timeout not applied: %v ctx=%v", err, ctx.Err())
 			}
 		})
+	}
+}
+
+func TestIncompleteUsageIsNotRecorded(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8}}\n\n")
+		}))
+		b := NewBridge(&Config{Token: "test", Endpoint: srv.URL})
+		rec := stats.NewRecorder(nil)
+		err := b.HandleChat(context.Background(), httptest.NewRecorder(), map[string]any{"model": "glm", "stream": stream, "messages": []any{map[string]any{"role": "user", "content": "hi"}}}, rec)
+		srv.Close()
+		if err == nil || rec.Report().PromptTokens != 0 || rec.Report("workbuddy").PromptTokens != 0 {
+			t.Fatal("incomplete stream was billed", err)
+		}
+	}
+}
+
+func TestIdleTimeoutRetainsCause(t *testing.T) {
+	previous := auth.CurrentStreamTimeouts()
+	auth.SetStreamTimeouts(previous.Header, 20*time.Millisecond)
+	defer auth.SetStreamTimeouts(previous.Header, previous.Idle)
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	err := ReadStream(&http.Response{Body: reader}, func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "stream idle timeout") {
+		t.Fatalf("idle timeout lost its reason: %v", err)
 	}
 }

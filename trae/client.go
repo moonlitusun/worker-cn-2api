@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,20 +19,22 @@ import (
 )
 
 type Bridge struct {
-	mu              sync.RWMutex
-	refreshGate     chan struct{}
-	credentialSaver func(Config) error
-	unsavedSession  bool
-	generation      uint64
-	diagnostics     Diagnostics
-	waiters         requestCounter
-	cfg             Config
-	client          *http.Client
-	slots           chan struct{}
-	catalogGate     chan struct{}
-	catalog         []Model
-	catalogAt       time.Time
-	catalogConfig   Config
+	enterpriseSession *Config
+	enterpriseSource  Config
+	mu                sync.RWMutex
+	refreshGate       chan struct{}
+	credentialSaver   func(Config) error
+	unsavedSession    bool
+	generation        uint64
+	diagnostics       Diagnostics
+	waiters           requestCounter
+	cfg               Config
+	client            *http.Client
+	slots             chan struct{}
+	catalogGate       chan struct{}
+	catalog           []Model
+	catalogAt         time.Time
+	catalogConfig     Config
 }
 
 func NewBridge(cfg Config) *Bridge {
@@ -88,6 +91,7 @@ func (b *Bridge) ChangeSession(change func(Config) (Config, error)) error {
 		return nil
 	}
 	b.cfg = next
+	b.enterpriseSession = nil
 	b.unsavedSession = false
 	b.generation++
 	b.diagnostics = Diagnostics{}
@@ -157,6 +161,9 @@ func (b *Bridge) request(ctx context.Context, c Config, path string, body any, s
 	if c.UserID != "" {
 		req.Header.Set("X-Uid", c.UserID)
 	}
+	if c.ClientID == EnterpriseClientID {
+		req.Header.Set("X-Ide-Function", "chat")
+	}
 	req.Header.Set("X-App-Id", "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8")
 	req.Header.Set("X-App-Version", "default")
 	req.Header.Set("X-App-Version-Code", c.VersionCode)
@@ -164,6 +171,17 @@ func (b *Bridge) request(ctx context.Context, c Config, path string, body any, s
 	req.Header.Set("X-Ide-Version", c.Version)
 	req.Header.Set("X-Ide-Version-Type", "stable")
 	req.Header.Set("User-Agent", "Trae/"+c.Version)
+	if c.ClientID == EnterpriseClientID {
+		// Enterprise raw-chat compatibility profile, validated against the live
+		// current-model roster and its backend keys (see release evidence).
+		req.Header.Set("X-App-Id", "7b3f9dc2-8a4e-5c6d-2f1b-9e4a3c5b7df0")
+		req.Header.Set("X-Ide-Version", "99.99.99")
+		req.Header.Set("X-Ide-Version-Code", "20260908")
+		req.Header.Set("Version", "0.206.1-tob")
+		req.Header.Set("Originator", "codex_exec")
+		req.Header.Set("User-Agent", "codex_exec/0.206.1-tob")
+	}
+
 	req.Header.Set("X-Device-Type", runtime.GOOS)
 	req.Header.Set("X-OS-Version", runtime.GOOS)
 	req.Header.Set("Request-Traffic-Type", "prod")
@@ -175,11 +193,15 @@ func (b *Bridge) request(ctx context.Context, c Config, path string, body any, s
 		req.Header.Set("X-Machine-Id", c.MachineID)
 	}
 	timeout := auth.CurrentStreamTimeouts().Header
-	timer := time.AfterFunc(timeout, cancel)
+	var headerTimedOut atomic.Bool
+	timer := time.AfterFunc(timeout, func() { headerTimedOut.Store(true); cancel() })
 	resp, err := b.client.Do(req)
 	timer.Stop()
 	if err != nil {
 		cancel()
+		if headerTimedOut.Load() {
+			return nil, fmt.Errorf("Trae response header timeout after %s", timeout)
+		}
 		return nil, fmt.Errorf("Trae connection failed: %s", scrub(err.Error(), c))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -204,6 +226,8 @@ func (b *Bridge) request(ctx context.Context, c Config, path string, body any, s
 }
 
 type Model struct {
+	BackendModel  string `json:"-"`
+	Channel       string `json:"channel,omitempty"`
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	ContextWindow int64  `json:"context_window,omitempty"`
@@ -237,7 +261,14 @@ func (b *Bridge) models(ctx context.Context, fresh bool) (result []Model, retErr
 	}
 	ctx, cancel := context.WithTimeout(ctx, auth.CurrentStreamTimeouts().Header)
 	defer cancel()
-	resp, err := b.request(ctx, cfg, "/api/ide/v1/get_detail_param", map[string]any{"function": Function, "config_names": nil, "need_prompt": false, "current_config_info": nil, "poly_prompt": true, "mode_type": nil, "agent_type": nil}, false)
+	path := "/api/ide/v1/get_detail_param"
+	body := map[string]any{"function": Function, "config_names": nil, "need_prompt": false, "current_config_info": nil, "poly_prompt": true, "mode_type": nil, "agent_type": nil}
+	enterprise := cfg.ClientID == EnterpriseClientID
+	if enterprise {
+		path = "/api/ide/v1/batch_get_detail_param"
+		body = map[string]any{"functions": []string{"chat_v3", "chat"}, "agent_type": "chat", "current_config_info": map[string]any{"config_name": "", "is_custom_model": false}, "mode_type": 0, "access_type": 4, "ab_force_vids": "", "ab_autotest_advanced_mode": 0, "show_custom_model": true}
+	}
+	resp, err := b.request(ctx, cfg, path, body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -259,6 +290,30 @@ func (b *Bridge) models(ctx context.Context, fresh bool) (result []Model, retErr
 	if nested, ok := obj["data"].(map[string]any); ok {
 		obj = nested
 	}
+	if enterprise {
+		groups, ok := obj["function_configs"].([]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid Trae enterprise catalog")
+		}
+		list := []any{}
+		// Prefer the current IDE roster; retain models unique to the CLI roster.
+		for _, function := range []string{"chat_v3", "chat"} {
+			for _, raw := range groups {
+				g, ok := raw.(map[string]any)
+				if !ok || g["function"] != function {
+					continue
+				}
+				items, _ := g["config_info_list"].([]any)
+				for _, raw := range items {
+					if m, ok := raw.(map[string]any); ok {
+						m["_gateway_function"] = function
+						list = append(list, m)
+					}
+				}
+			}
+		}
+		obj["config_info_list"] = list
+	}
 	list, ok := obj["config_info_list"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("Trae catalog has no config_info_list")
@@ -275,18 +330,50 @@ func (b *Bridge) models(ctx context.Context, fresh bool) (result []Model, retErr
 			continue
 		}
 		display, _ := m["display_config"].(map[string]any)
+		backend := ""
+		channel := Function
+		if enterprise {
+			if display["is_custom_model"] == true {
+				continue
+			}
+			switch id {
+			case "summary", "title_generation", "custom_model_placeholder", "input_optimization":
+				continue
+			}
+			details, _ := m["model_detail_list"].([]any)
+			for _, raw := range details {
+				d, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				key, _ := d["model_name"].(string)
+				if backend == "" {
+					backend = key
+				}
+				if strings.HasSuffix(key, "__dev") {
+					backend = key
+					break
+				}
+			}
+			if backend == "" {
+				continue
+			}
+			channel, _ = m["_gateway_function"].(string)
+		}
 		name, _ := display["display_name"].(string)
 		if name == "" {
 			continue
 		}
-		if f, _ := m["raw_chat_function"].(string); f != "" && f != Function {
+		if f, _ := m["raw_chat_function"].(string); !enterprise && f != "" && f != Function {
 			continue
 		}
 		// These exact configurations are raw-agent-only in the reference lane's
 		// captured tests; do not hide other similarly named configs (e.g. -Official).
 		switch strings.ToLower(id) {
 		case "agnes-2.0-flash", "agnes-agent-x", "deepseek-v4-flash", "deepseek-v4-pro":
-			continue
+			if !enterprise {
+				continue
+			}
 		}
 		var window int64
 		if v, ok := m["context_window_tokens"].(map[string]any); ok {
@@ -294,7 +381,7 @@ func (b *Bridge) models(ctx context.Context, fresh bool) (result []Model, retErr
 				window = int64(n)
 			}
 		}
-		models = append(models, Model{ID: id, Name: name, ContextWindow: window})
+		models = append(models, Model{ID: id, Name: name, ContextWindow: window, BackendModel: backend, Channel: channel})
 		seen[id] = true
 	}
 	if len(models) == 0 {

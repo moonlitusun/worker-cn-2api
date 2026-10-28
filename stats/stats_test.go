@@ -267,3 +267,82 @@ func (f *fakePersister) SaveStats(d *Data) error {
 	}
 	return f.saveFn(d)
 }
+
+func TestChannelReportsPersistAndKeepLegacyTotals(t *testing.T) {
+	r := NewRecorder(nil)
+	r.Record("qoder/a", true)
+	r.Record("trae/b", false)
+	r.Record("workbuddy/c", true)
+	r.Record("legacy-wb", true)
+	r.RecordUsageFor("qoder", &Usage{PromptTokens: 10, CompletionTokens: 5})
+	if all := r.Report(); all.Total != 4 || all.PromptTokens != 10 {
+		t.Fatal(all)
+	}
+	if q := r.Report("qoder"); q.Total != 1 || q.Success != 1 || q.PromptTokens != 10 || len(q.ByModel) != 1 {
+		t.Fatal(q)
+	}
+	if wb := r.Report("workbuddy"); wb.Total != 2 || wb.PromptTokens != 0 {
+		t.Fatal(wb)
+	}
+	if tr := r.Report("trae"); tr.Failed != 1 {
+		t.Fatal(tr)
+	}
+	q := r.Report("qoder")
+	var hourly int64
+	for _, h := range q.Hourly {
+		hourly += h.Total
+	}
+	if hourly != 1 {
+		t.Fatal("channel hourly", hourly)
+	}
+	cp := r.data.Clone()
+	cp.Channels["qoder"].Total = 99
+	if r.Report("qoder").Total != 1 {
+		t.Fatal("channel snapshot aliases live stats")
+	}
+}
+
+func TestLegacyChannelMigrationAndReload(t *testing.T) {
+	old := newData()
+	old.Total = 3
+	old.Success = 2
+	old.Failed = 1
+	old.PromptTokens = 100
+	old.ByModel["qoder/a"] = &ModelStat{Model: "qoder/a", Total: 1, Success: 1}
+	old.ByModel["old-wb"] = &ModelStat{Model: "old-wb", Total: 2, Success: 1, Failed: 1}
+	p := &fakePersister{loadFn: func() *Data { return old }}
+	r := NewRecorder(p)
+	if r.Report("qoder").Total != 1 || r.Report("workbuddy").Total != 2 || r.Report().PromptTokens != 100 || r.Report("qoder").PromptTokens != 0 {
+		t.Fatal("legacy migration failed")
+	}
+	r.Record("trae/b", true)
+	var saved *Data
+	p.saveFn = func(d *Data) error { saved = d; return nil }
+	if err := r.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	restored := NewRecorder(&fakePersister{loadFn: func() *Data { return saved }})
+	if restored.Report().Total != 4 || restored.Report("trae").Total != 1 || restored.Report("qoder").Total != 1 {
+		t.Fatal("channel counters lost or duplicated on restart")
+	}
+}
+
+func TestRecentFailuresBoundAndIsolation(t *testing.T) {
+	r := NewRecorder(nil)
+	for i := 0; i < MaxFailures+5; i++ {
+		if err := r.RecordFailure(Failure{At: strconv.Itoa(i), Provider: "qoder", Reason: "timeout"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep := r.Report()
+	if len(rep.Failures) != MaxFailures || rep.Failures[0].At != strconv.Itoa(MaxFailures+4) {
+		t.Fatal("failure retention/order")
+	}
+	rep.Failures[0].Reason = "changed"
+	if r.Report().Failures[0].Reason != "timeout" {
+		t.Fatal("mutable report aliases live failures")
+	}
+	if len(r.Report("trae").Failures) != 0 {
+		t.Fatal("failure filter")
+	}
+}

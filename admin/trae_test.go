@@ -122,6 +122,24 @@ func TestTraeAdminCredentialsAndModels(t *testing.T) {
 	}
 }
 
+// Pasted authorization headers must persist only their raw token value.
+func TestTraePastedAuthorizationPrefix(t *testing.T) {
+	for _, token := range []string{"Cloud-IDE-JWT secret-token", "Bearer secret-token", "bearer   secret-token", "secret-token"} {
+		t.Run(token, func(t *testing.T) {
+			a, st := newAdmin(t)
+			b := trae.NewBridge(trae.Config{})
+			a.SetTraeBridge(b)
+			w := doRequest(t, a.handleTrae, "POST", "/admin/api/trae", map[string]string{"token": token})
+			if w.Code != 200 || b.Config().Token != "secret-token" {
+				t.Fatalf("pasted token was not normalized: status %d", w.Code)
+			}
+			if saved, _ := st.GetTraeCredentials(); saved != "secret-token" {
+				t.Fatal("persisted authorization prefix")
+			}
+		})
+	}
+}
+
 func TestTraeNamedAccountsNeverExposeCredentials(t *testing.T) {
 	a, st := newAdmin(t)
 	b := trae.NewBridge(trae.Config{Token: "current-secret", RefreshToken: "current-refresh", ClientID: "en1oxy7wnw8j9n"})

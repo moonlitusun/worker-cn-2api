@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"worker-cn-2api/stats"
 )
 
 type Bridge struct {
@@ -42,7 +43,7 @@ type QueueTimeoutError struct{}
 
 func (e *QueueTimeoutError) Error() string { return "WorkBuddy CN upstream queue timeout" }
 
-func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map[string]interface{}) error {
+func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map[string]interface{}, recorders ...*stats.Recorder) error {
 	model, _ := body["model"].(string)
 	model, err := normalizeModel(model)
 	if err != nil {
@@ -68,11 +69,22 @@ func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map
 	if err != nil {
 		return err
 	}
+	var usage map[string]any
+	observe := func(chunk map[string]any) {
+		if u, ok := chunk["usage"].(map[string]any); ok {
+			usage = u
+		}
+	}
 	stream, _ := body["stream"].(bool)
 	if stream {
-		return b.handleStream(w, resp)
+		err = b.handleStream(w, resp, observe)
+	} else {
+		err = b.handleSync(w, resp, model, observe)
 	}
-	return b.handleSync(w, resp, model)
+	if err == nil && len(recorders) > 0 && recorders[0] != nil {
+		recorders[0].RecordUsageFor("workbuddy", stats.UsageFromMap(usage))
+	}
+	return err
 }
 
 var errDone = errors.New("SSE done")
@@ -99,7 +111,7 @@ func parseEvent(line string) (map[string]interface{}, bool, error) {
 	return chunk, false, nil
 }
 
-func (b *Bridge) handleStream(w http.ResponseWriter, resp *http.Response) error {
+func (b *Bridge) handleStream(w http.ResponseWriter, resp *http.Response, observers ...func(map[string]any)) error {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -150,6 +162,9 @@ func (b *Bridge) handleStream(w http.ResponseWriter, resp *http.Response) error 
 			}
 			return errDone
 		}
+		for _, observe := range observers {
+			observe(chunk)
+		}
 		choices, _ := chunk["choices"].([]interface{})
 		for _, raw := range choices {
 			choice, _ := raw.(map[string]interface{})
@@ -183,7 +198,7 @@ type aggregatedChoice struct {
 	tools        map[int]map[string]interface{}
 }
 
-func (b *Bridge) handleSync(w http.ResponseWriter, resp *http.Response, model string) error {
+func (b *Bridge) handleSync(w http.ResponseWriter, resp *http.Response, model string, observers ...func(map[string]any)) error {
 	result := map[string]interface{}{"id": NewRequestID(), "object": "chat.completion", "created": time.Now().Unix(), "model": model}
 	choices := map[int]*aggregatedChoice{}
 	completed := false
@@ -195,6 +210,9 @@ func (b *Bridge) handleSync(w http.ResponseWriter, resp *http.Response, model st
 		if done {
 			completed = true
 			return errDone
+		}
+		for _, observe := range observers {
+			observe(chunk)
 		}
 		for _, k := range []string{"id", "created", "model", "usage", "system_fingerprint"} {
 			if v, ok := chunk[k]; ok && v != nil {

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"worker-cn-2api/auth"
+	"worker-cn-2api/stats"
 )
 
 type ReportedError struct{ Err error }
@@ -20,7 +22,7 @@ func (e *ReportedError) Unwrap() error { return e.Err }
 
 var errTerminal = errors.New("Trae terminal event")
 
-func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map[string]any) (retErr error) {
+func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map[string]any, recorders ...*stats.Recorder) (retErr error) {
 	o := b.observe()
 	defer func() { b.record("chat", o, retErr) }()
 	req, err := BuildRequest(body)
@@ -50,12 +52,47 @@ func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map
 	defer func() { <-b.slots }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	resp, err := b.request(ctx, cfg, "/api/agent/v3/llm_utils_chat", req, true)
+	path := "/api/agent/v3/llm_utils_chat"
+	if cfg.ClientID == EnterpriseClientID {
+		models, e := b.Models(ctx)
+		if e != nil {
+			return e
+		}
+		model, _ := req["model"].(string)
+		backend := ""
+		function := ""
+		for _, m := range models {
+			if m.ID == model {
+				backend = m.BackendModel
+				function = m.Channel
+				break
+			}
+		}
+		if backend == "" {
+			return bad("model is not in the Trae enterprise catalog")
+		}
+		path = "/api/ide/v2/llm_raw_chat"
+		delete(req, "model")
+		req["function"] = function
+		req["model_name"] = backend
+		req["user_input"] = ""
+		session := uuid.NewString()
+		req["session_id"] = session
+		req["conversation_id"] = session
+		req["metadata"] = map[string]any{"agent_type": "chat", "use_prompt_cache_pool": true}
+		req["mode_type"] = 0
+		req["access_type"] = 4
+		if _, ok := req["tools"]; !ok {
+			req["tools"] = []any{}
+		}
+	}
+	resp, err := b.request(ctx, cfg, path, req, true)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	idle := time.AfterFunc(auth.CurrentStreamTimeouts().Idle, func() { resp.Body.Close() })
+	var idleTimedOut atomic.Bool
+	idle := time.AfterFunc(auth.CurrentStreamTimeouts().Idle, func() { idleTimedOut.Store(true); resp.Body.Close() })
 	defer idle.Stop()
 	reader := &activityReader{Reader: resp.Body, timer: idle, duration: auth.CurrentStreamTimeouts().Idle}
 	type item struct {
@@ -168,6 +205,9 @@ func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map
 	}
 	err = run()
 	if !errors.Is(err, errTerminal) {
+		if idleTimedOut.Load() {
+			err = fmt.Errorf("Trae stream idle timeout after %s", auth.CurrentStreamTimeouts().Idle)
+		}
 		var ue *Error
 		if errors.As(err, &ue) {
 			copy := *ue
@@ -183,6 +223,13 @@ func (b *Bridge) HandleChat(ctx context.Context, w http.ResponseWriter, body map
 		// Do not emit a successful finish or DONE after a broken upstream stream.
 		_ = write(map[string]any{"error": map[string]any{"type": "upstream_error", "message": scrub(err.Error(), cfg)}})
 		return &ReportedError{err}
+	}
+	if len(recorders) > 0 && recorders[0] != nil {
+		defer func() {
+			if retErr == nil {
+				recorders[0].RecordUsageFor("trae", stats.UsageFromMap(state.Usage))
+			}
+		}()
 	}
 	if stream {
 		delta := map[string]any{}

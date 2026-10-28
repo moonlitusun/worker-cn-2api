@@ -25,13 +25,22 @@ type ModelInfo struct {
 
 // Models caches only a successfully fetched catalog for the active credential.
 func (b *Bridge) Models(ctx context.Context) ([]ModelInfo, error) {
+	return b.models(ctx, false)
+}
+
+// TestModels bypasses the catalog cache for explicit connection tests.
+func (b *Bridge) TestModels(ctx context.Context) ([]ModelInfo, error) {
+	return b.models(ctx, true)
+}
+
+func (b *Bridge) models(ctx context.Context, fresh bool) ([]ModelInfo, error) {
 	b.catalogMu.Lock()
 	defer b.catalogMu.Unlock()
 	cfg := b.Config()
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("WorkBuddy CN token is not configured")
 	}
-	if b.catalogToken == cfg.Token && time.Since(b.catalogAt) < time.Hour {
+	if !fresh && b.catalogToken == cfg.Token && time.Since(b.catalogAt) < time.Hour {
 		return append([]ModelInfo(nil), b.catalog...), nil
 	}
 	endpoint, err := url.Parse(cfg.Endpoint)

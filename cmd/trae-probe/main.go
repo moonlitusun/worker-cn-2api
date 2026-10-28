@@ -74,14 +74,14 @@ func run(path, model string, modelsOnly, tools bool) error {
 		return result, nil
 	}
 	if _, err = syncCall(request); err != nil {
-		return err
+		return fmt.Errorf("non-stream probe: %w", err)
 	}
 	report["sync"] = "passed"
 	report["model"] = model
 	request["stream"] = true
 	request["stream_options"] = map[string]any{"include_usage": true}
 	if err = b.HandleChat(ctx, httptest.NewRecorder(), request); err != nil {
-		return err
+		return fmt.Errorf("stream probe: %w", err)
 	}
 	report["stream"] = "passed"
 	if tools {
@@ -93,7 +93,7 @@ func run(path, model string, modelsOnly, tools bool) error {
 		request["tool_choice"] = "required"
 		result, err := syncCall(request)
 		if err != nil {
-			return err
+			return fmt.Errorf("tool call probe: %w", err)
 		}
 		choices, _ := result["choices"].([]any)
 		if len(choices) != 1 {

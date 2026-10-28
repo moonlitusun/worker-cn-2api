@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,11 +85,15 @@ func (c *Client) OpenStream(ctx context.Context, req *UpstreamChatRequest) (*htt
 		return nil, err
 	}
 	setHeaders(httpReq, cfg)
-	timer := time.AfterFunc(auth.CurrentStreamTimeouts().Header, cancel)
+	var headerTimedOut atomic.Bool
+	timer := time.AfterFunc(auth.CurrentStreamTimeouts().Header, func() { headerTimedOut.Store(true); cancel() })
 	resp, err := c.httpClient.Do(httpReq)
 	timer.Stop()
 	if err != nil {
 		cancel()
+		if headerTimedOut.Load() {
+			return nil, fmt.Errorf("WorkBuddy response header timeout after %s", auth.CurrentStreamTimeouts().Header)
+		}
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -116,7 +121,8 @@ func (b *cancelBody) Close() error { b.cancel(); return b.ReadCloser.Close() }
 // ReadStream handles SSE event boundaries, including multiline data fields.
 func ReadStream(resp *http.Response, callback StreamCallback) error {
 	defer resp.Body.Close()
-	timer := time.AfterFunc(auth.CurrentStreamTimeouts().Idle, func() { resp.Body.Close() })
+	var idleTimedOut atomic.Bool
+	timer := time.AfterFunc(auth.CurrentStreamTimeouts().Idle, func() { idleTimedOut.Store(true); resp.Body.Close() })
 	defer timer.Stop()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
@@ -141,6 +147,9 @@ func ReadStream(resp *http.Response, callback StreamCallback) error {
 		if strings.HasPrefix(line, "data:") {
 			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
+	}
+	if idleTimedOut.Load() {
+		return fmt.Errorf("WorkBuddy stream idle timeout after %s", auth.CurrentStreamTimeouts().Idle)
 	}
 	if err := scanner.Err(); err != nil {
 		return err

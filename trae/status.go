@@ -3,11 +3,13 @@ package trae
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 )
 
 type Operation struct {
+	ModelCount *int   `json:"model_count,omitempty"`
 	At         string `json:"at,omitempty"`
 	Success    bool   `json:"success"`
 	Error      string `json:"error,omitempty"`
@@ -39,13 +41,17 @@ func (b *Bridge) observe() observation {
 	defer b.mu.RUnlock()
 	return observation{b.generation, b.cfg, time.Now()}
 }
-func (b *Bridge) record(kind string, o observation, err error) {
+func (b *Bridge) record(kind string, o observation, err error, modelCount ...int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.generation != o.Generation {
 		return
 	}
 	op := Operation{At: time.Now().UTC().Format(time.RFC3339), Success: err == nil, DurationMS: time.Since(o.Start).Milliseconds()}
+	if len(modelCount) > 0 {
+		n := modelCount[0]
+		op.ModelCount = &n
+	}
 	if err != nil {
 		op.Error = scrub(scrub(err.Error(), o.Config), b.cfg)
 		if len(op.Error) > 2000 {
@@ -69,11 +75,15 @@ func (b *Bridge) Status() Diagnostics {
 	defer b.mu.RUnlock()
 	s := b.diagnostics
 	s.Configured = b.cfg.Token != ""
-	s.RefreshAvailable = b.cfg.RefreshToken != ""
+	s.RefreshAvailable = b.cfg.RefreshToken != "" || strings.HasPrefix(b.cfg.Token, "trae-lt-")
 	s.PersistencePending = b.unsavedSession
 	s.Active = len(b.slots)
 	s.Queued = b.waiters.Load()
-	if expiry := tokenExpiry(b.cfg); !expiry.IsZero() {
+	effective := b.cfg
+	if b.enterpriseSession != nil && b.enterpriseSource == b.cfg {
+		effective = *b.enterpriseSession
+	}
+	if expiry := tokenExpiry(effective); !expiry.IsZero() {
 		s.ExpiresAt = expiry.UTC().Format(time.RFC3339)
 		seconds := int64(time.Until(expiry).Seconds())
 		s.ExpiresInSeconds = &seconds
@@ -93,7 +103,7 @@ type ProbeResult struct {
 // concrete model was explicitly selected by the administrator.
 func (b *Bridge) Probe(ctx context.Context, model string) (result ProbeResult, err error) {
 	o := b.observe()
-	defer func() { b.record("test", o, err) }()
+	defer func() { b.record("test", o, err, result.ModelCount) }()
 	models, err := b.models(ctx, true)
 	if err != nil {
 		return result, err

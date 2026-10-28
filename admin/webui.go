@@ -776,6 +776,39 @@ input[readonly] {
 .model-toolbar input[type="search"]:focus { border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-glow); }
 .model-count-badge { font-size:12px;color:var(--muted);white-space:nowrap;padding:0 6px; }
 @media(max-width:600px) { .provider-meta { grid-template-columns:1fr; } .provider-actions .provider-select { flex-basis:100%; } .model-grid { grid-template-columns:minmax(0,1fr); } .provider-actions .btn { flex:1; } .model-toolbar { flex-wrap:wrap; } .model-toolbar .provider-select { flex:1 1 100%; } .model-toolbar input[type="search"] { flex:1 1 100%; } }
+
+/* Advanced management: compact sections, shared status rows. */
+.advanced-summary { cursor:pointer; list-style:none; }
+.advanced-summary::-webkit-details-marker,.settings-panel>summary::-webkit-details-marker,.failure-summary::-webkit-details-marker { display:none; }
+.advanced-summary-meta { display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px; }
+.disclosure-chevron { display:inline-block;transition:transform .18s; }
+details[open]>.advanced-summary .disclosure-chevron,details[open]>.advanced-heading .disclosure-chevron { transform:rotate(180deg); }
+.advanced-body { display:grid;grid-template-columns:minmax(0,1fr);gap:16px;background:var(--surface-2); }
+.advanced-panel { min-width:0;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:18px 20px; }
+.advanced-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;font-weight:600;list-style:none; }
+.settings-panel>summary { cursor:pointer; }
+.advanced-grid { display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start; }
+.advanced-fields { margin-top:20px; }
+.advanced-fields .row { flex-direction:column;align-items:stretch;gap:8px;margin-bottom:16px; }
+.advanced-fields .row>label { font-size:12px;min-width:0;color:var(--muted); }
+.advanced-fields .field { width:100%; }
+.session-panel .provider-meta { grid-template-columns:repeat(4,minmax(0,1fr));margin:16px 0;padding:16px;gap:16px; }
+.chat-test-actions { margin:16px 0 0; }
+.chat-test-actions select { flex:1; }
+.operation-row { display:grid;grid-template-columns:80px 64px minmax(0,1fr);align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--border);font-size:12px; }
+.operation-label { color:var(--text); }
+.operation-time { min-width:0;overflow-wrap:anywhere;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums; }
+.operation-badge { color:var(--muted);font-size:11px; }
+.operation-badge.success { color:var(--success); }
+.operation-badge.failed,.failure-kind { color:var(--danger); }
+.failure-list { max-height:460px;overflow:auto; }
+.failure-item+.failure-item { border-top:1px solid var(--border); }
+.failure-summary { display:flex;align-items:center;gap:12px;padding:13px 0;cursor:pointer;list-style:none; }
+.failure-title { font-size:12px;overflow-wrap:anywhere;flex:1;min-width:0; }
+.failure-kind { font-size:11px;padding:3px 7px;border-radius:6px;background:var(--surface-2);white-space:nowrap; }
+.failure-meta { font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums; }
+.failure-reason { grid-column:1/-1;margin:8px 0 12px;padding:12px;background:var(--surface-2);border-radius:8px;font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted); }
+@media(max-width:700px) { .advanced-grid { grid-template-columns:1fr; } .session-panel .provider-meta { grid-template-columns:repeat(2,minmax(0,1fr)); } .advanced-panel { padding:16px; } .operation-row { grid-template-columns:70px 48px minmax(0,1fr);gap:8px; } .failure-summary { flex-wrap:wrap; } .failure-meta { width:100%; } }
 </style>
 </head>
 <body>
@@ -785,7 +818,7 @@ input[readonly] {
   <div class="login-card">
     <div class="login-mark">W</div>
     <div class="login-title">Worker-CN-2API</div>
-    <div class="login-subtitle">国内 AI Coding Worker 统一中继网关 · 请输入管理密码</div>
+    <div class="login-subtitle">请输入管理密码</div>
     <input type="password" id="loginPassword" class="login-input" placeholder="管理密码" autofocus autocomplete="current-password">
     <button class="login-btn" type="button" onclick="doLogin()">登 录</button>
     <div id="loginError" class="login-error"></div>
@@ -802,7 +835,6 @@ input[readonly] {
       <div class="brand-mark">W</div>
       <div>
         <div class="brand-name">Worker-CN-2API</div>
-        <div class="brand-sub">多平台中继网关</div>
       </div>
     </div>
     <nav class="nav">
@@ -859,8 +891,11 @@ input[readonly] {
     <section id="page-stats" class="page">
       <div class="page-head">
         <div class="page-title">请求统计</div>
-        <div class="page-desc">统计自服务启动以来记录的请求，每 30 秒持久化一次</div>
+
       </div>
+      <div id="statsChannelTabs" class="provider-actions" style="margin-bottom:20px"></div>
+      <p id="statsChannelHint" class="hint" hidden>渠道历史用量无法回溯。</p>
+
 
       <div class="stat-grid">
         <div class="stat-card">
@@ -912,13 +947,17 @@ input[readonly] {
           </table>
         </div>
       </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">最近失败</div><span id="failureCount" class="model-count-badge">0 条</span></div>
+        <div class="card-body failure-list" id="failureList" aria-live="polite"></div>
+      </div>
     </section>
 
     <!-- Keys -->
     <section id="page-keys" class="page hidden">
       <div class="page-head">
         <div class="page-title">API 密钥</div>
-        <div class="page-desc">客户端调用 /v1/chat/completions 时使用的密钥</div>
+
       </div>
 
       <div class="card">
@@ -954,14 +993,16 @@ input[readonly] {
     <section id="page-token" class="page hidden">
       <div class="page-head">
         <div class="page-title">渠道凭证</div>
+
       </div>
 
       <div class="card">
         <div class="card-head"><div class="card-title">Qoder CN</div><span id="qoderBadge" class="badge">检查中...</span></div>
         <div class="card-body">
-          <div class="row"><label for="qoderDisplay">当前 PAT</label><div class="field"><input id="qoderDisplay" type="text" readonly placeholder="未配置"></div></div>
-          <div class="row"><label for="qoderInput">新 PAT</label><div class="field"><input id="qoderInput" type="password" autocomplete="off" placeholder="PAT"></div></div>
-          <div class="btn-row right"><button class="btn danger sm" type="button" onclick="clearQoder()">清空</button><button class="btn" type="button" onclick="saveQoder()">保存</button></div>
+          <div class="row"><label for="qoderDisplay">当前凭据</label><div class="field"><input id="qoderDisplay" type="text" readonly placeholder="未配置"></div></div>
+          <div class="row"><label for="qoderInput">更新凭据</label><div class="field"><input id="qoderInput" type="password" autocomplete="off" placeholder="PAT"></div></div>
+          <div class="btn-row right"><button class="btn danger sm" type="button" onclick="clearQoder()">清空</button><button id="qoderTestButton" class="btn secondary sm" type="button" onclick="testChannel('qoder')">测试连接</button><button id="qoderSaveButton" class="btn" type="button" onclick="saveQoder()">保存并测试连接</button></div>
+          <p id="qoderStatusHint" class="hint" role="status"></p>
         </div>
       </div>
 
@@ -973,17 +1014,19 @@ input[readonly] {
         </div>
         <div class="card-body">
           <div class="row">
-            <label>当前令牌</label>
+            <label>当前凭据</label>
             <div class="field"><input type="text" id="wbDisplay" readonly placeholder="未配置"></div>
           </div>
           <div class="row">
-            <label>新令牌</label>
-            <div class="field"><input type="text" id="wbInput" placeholder="填入 accessToken 或旧版 auth_token" autocomplete="off"></div>
+            <label>更新凭据</label>
+            <div class="field"><input type="password" id="wbInput" placeholder="填入 accessToken 或旧版 auth_token" autocomplete="off"></div>
           </div>
           <div class="btn-row right">
             <button class="btn danger sm" type="button" onclick="clearWorkBuddy()">清空</button>
-            <button class="btn" type="button" onclick="saveWorkBuddy()">保存</button>
+            <button id="workbuddyTestButton" class="btn secondary sm" type="button" onclick="testChannel('workbuddy')">测试连接</button>
+            <button id="workbuddySaveButton" class="btn" type="button" onclick="saveWorkBuddy()">保存并测试连接</button>
           </div>
+          <p id="workbuddyStatusHint" class="hint" role="status"></p>
         </div>
       </div>
       <div class="card">
@@ -992,22 +1035,51 @@ input[readonly] {
           <span id="traeBadge" class="badge">检查中...</span>
         </div>
         <div class="card-body">
+          <div class="row"><label for="traeDisplay">当前凭据</label><div class="field"><input id="traeDisplay" type="text" readonly placeholder="未配置"></div></div>
+          <div class="row"><label for="traeInput">更新凭据</label><div class="field"><input id="traeInput" type="password" autocomplete="off" placeholder="个人版 JWT 或企业版 trae-lt- 登录令牌"></div></div>
+          <div class="btn-row right">
+            <button class="btn danger sm" type="button" onclick="clearTrae()">清空</button>
+            <button id="traeConnectionButton" class="btn secondary sm" type="button" onclick="testTrae(false)">测试连接</button>
+            <button id="traeSaveButton" class="btn" type="button" onclick="saveTrae()">保存并测试连接</button>
+          </div>
+          <p id="traeStatusHint" class="hint" role="status"></p>
+
+        </div>
+      </div>
+      <details class="card advanced-management">
+        <summary class="card-head advanced-summary"><span>高级管理</span><span class="advanced-summary-meta">Trae CN <span class="disclosure-chevron">⌄</span></span></summary>
+        <div class="card-body advanced-body">
+          <section class="advanced-panel session-panel">
+            <div class="advanced-heading"><span>会话状态</span><button class="btn secondary sm" type="button" onclick="loadTraeStatus(false)">刷新</button></div>
           <dl class="provider-meta">
             <div><dt>当前账号</dt><dd id="traeCurrentAccount">当前会话（未命名）</dd></div>
             <div><dt>有效期</dt><dd id="traeExpiryStatus">检查中…</dd></div>
             <div><dt>自动续期</dt><dd id="traeRefreshStatus">检查中…</dd></div>
             <div><dt>正在处理 / 排队</dt><dd id="traeConcurrency">0 / 0</dd></div>
           </dl>
-          <p id="traeStatusHint" class="hint" role="status"></p>
-          <div class="provider-actions">
-            <button id="traeConnectionButton" class="btn secondary sm" type="button" onclick="testTrae(false)">测试连接</button>
-            <button class="btn secondary sm" type="button" onclick="loadTraeStatus(false)">刷新状态</button>
-            <select id="traeTestModel" class="provider-select" aria-label="选择测试对话的模型"><option value="">先测试连接，再选择模型</option></select>
-            <button id="traeChatButton" class="btn secondary sm" type="button" onclick="testTrae(true)">测试对话（消耗额度）</button>
-          </div>
-          <div id="traeOperations" aria-live="polite"></div>
-          <details style="margin:18px 0">
-            <summary>已保存账号</summary>
+            <div id="traeOperations" class="operation-list" aria-live="polite"></div>
+          </section>
+          <section class="advanced-panel">
+            <div class="advanced-heading"><span>对话测试</span><span class="model-tag">消耗少量额度</span></div>
+            <div class="provider-actions chat-test-actions">
+              <select id="traeTestModel" class="provider-select" aria-label="选择测试对话的模型"><option value="">先测试连接，再选择模型</option></select>
+              <button id="traeChatButton" class="btn secondary sm" type="button" onclick="testTrae(true)">测试对话</button>
+            </div>
+          </section>
+          <div class="advanced-grid">
+            <details class="advanced-panel settings-panel">
+              <summary class="advanced-heading"><span>凭据与续期</span><span class="disclosure-chevron">⌄</span></summary>
+              <div class="advanced-fields">
+            <div class="row"><label for="traeUserID">用户 ID</label><div class="field"><input id="traeUserID" type="text" autocomplete="off" placeholder="可选，账号 UserID"></div></div>
+            <div class="row"><label for="traeClientID">产品类型</label><div class="field"><select id="traeClientID"><option value="ono9krqynydwx5">Trae Code CN</option><option value="en1oxy7wnw8j9n">TRAE SOLO CN</option></select></div></div>
+            <div class="row"><label for="traeRefresh">刷新令牌</label><div class="field"><input id="traeRefresh" type="password" autocomplete="off" placeholder="可选，RefreshToken；保存时替换旧值"></div></div>
+            <div class="row"><label for="traeExpires">过期时间</label><div class="field"><input id="traeExpires" type="text" placeholder="可选，ISO 8601；JWT 可自动识别"></div></div>
+
+              </div>
+            </details>
+            <details class="advanced-panel settings-panel">
+              <summary class="advanced-heading"><span>已保存账号</span><span class="disclosure-chevron">⌄</span></summary>
+              <div class="advanced-fields">
             <div class="row"><label for="traeAccountSelect">账号</label><div class="field"><select id="traeAccountSelect" onchange="selectTraeProfile()"><option value="">当前会话（未保存）</option></select></div></div>
             <div class="row"><label for="traeAccountName">账号名称</label><div class="field"><input id="traeAccountName" type="text" maxlength="80" placeholder="例如：主账号、备用账号"></div></div>
             <div class="provider-actions">
@@ -1016,42 +1088,31 @@ input[readonly] {
               <button class="btn secondary sm" type="button" onclick="saveTraeAccount(false)">更新并切换</button>
               <button class="btn danger sm" type="button" onclick="deleteTraeAccount()">删除所选账号</button>
             </div>
-          </details>
-          <div class="row"><label for="traeDisplay">当前令牌</label><div class="field"><input id="traeDisplay" type="text" readonly placeholder="未配置"></div></div>
-          <div class="row"><label for="traeInput">新令牌</label><div class="field"><input id="traeInput" type="password" autocomplete="off" placeholder="Cloud-IDE-JWT 原始值"></div></div>
-          <div class="row"><label for="traeUserID">用户 ID</label><div class="field"><input id="traeUserID" type="text" autocomplete="off" placeholder="可选，账号 UserID"></div></div>
-          <details>
-            <summary class="hint">自动续期设置（可选）</summary>
-            <div class="row"><label for="traeClientID">产品类型</label><div class="field"><select id="traeClientID"><option value="ono9krqynydwx5">Trae Code CN</option><option value="en1oxy7wnw8j9n">TRAE SOLO CN</option></select></div></div>
-            <div class="row"><label for="traeRefresh">刷新令牌</label><div class="field"><input id="traeRefresh" type="password" autocomplete="off" placeholder="可选，RefreshToken；保存时替换旧值"></div></div>
-            <div class="row"><label for="traeExpires">过期时间</label><div class="field"><input id="traeExpires" type="text" placeholder="可选，ISO 8601；JWT 可自动识别"></div></div>
-          </details>
-          <div class="btn-row right">
-            <button class="btn danger sm" type="button" onclick="clearTrae()">清空</button>
-            <button class="btn" type="button" onclick="saveTrae()">保存 Trae 令牌</button>
+              </div>
+            </details>
           </div>
         </div>
-      </div>
+      </details>
     </section>
 
     <!-- Models -->
     <section id="page-models" class="page hidden">
       <div class="page-head">
         <div class="page-title">可用模型</div>
-        <div class="page-desc">点击「复制」获取模型名称用于 API 调用</div>
+
       </div>
 
       <div class="card">
         <div class="card-head"><div class="card-title">模型列表</div></div>
         <div class="card-body">
+          <div id="modelChannelTabs" class="provider-actions" style="margin-bottom:16px"></div>
           <div class="model-toolbar">
-            <select id="modelProviderFilter" class="provider-select" aria-label="模型渠道筛选" onchange="renderModels()"><option value="">全部渠道</option><option value="qoder-cn">Qoder CN</option><option value="trae-cn">Trae CN</option><option value="workbuddy-cn">WorkBuddy CN</option></select>
+
             <input id="modelSearch" type="search" aria-label="搜索模型" placeholder="搜索模型名称或 ID…" oninput="renderModels()">
             <span id="modelCount" class="model-count-badge"></span>
             <button class="btn secondary sm" type="button" onclick="loadModels()">重新加载</button>
           </div>
-          <div id="modelProviderErrors" role="status"></div>
-          <p class="hint">模型可用性以账号套餐及各平台上游实际权限为准。</p>
+
           <div id="modelsList" class="model-grid"></div>
         </div>
       </div>
@@ -1061,13 +1122,13 @@ input[readonly] {
     <section id="page-config" class="page hidden">
       <div class="page-head">
         <div class="page-title">设置</div>
-        <div class="page-desc">服务器监听配置与管理密码</div>
+
       </div>
 
       <div class="card">
         <div class="card-head"><div class="card-title">服务器配置</div></div>
         <div class="card-body">
-          <p class="hint">配置监听地址和端口，修改后需要重启服务才能生效。</p>
+          <p class="hint">修改后需重启。</p>
           <div class="row">
             <label>主机</label>
             <div class="field"><input type="text" id="cfgHost" placeholder="0.0.0.0" autocomplete="off"></div>
@@ -1083,7 +1144,7 @@ input[readonly] {
       <div class="card">
         <div class="card-head"><div class="card-title">超时配置</div></div>
         <div class="card-body">
-          <p class="hint">Chat 响应超时（秒）：等待上游开始响应（返回响应头）的最长时间；流空闲超时（秒）：流式响应中持续无数据的最长等待，只要数据持续到达就不会中断。保存后立即生效，无需重启。</p>
+          <p class="hint">响应超时：等待开始返回。空闲超时：返回过程中无数据。单位：秒。</p>
           <div class="row">
             <label>响应超时</label>
             <div class="field"><input type="number" id="cfgChatTimeout" placeholder="120" min="1" max="3600"></div>
@@ -1101,7 +1162,7 @@ input[readonly] {
       <div class="card">
         <div class="card-head"><div class="card-title">修改密码</div></div>
         <div class="card-body">
-          <p class="hint">修改管理控制台的登录密码。</p>
+
           <div class="row">
             <label>当前密码</label>
             <div class="field"><input type="password" id="curPwd" placeholder="当前密码" autocomplete="current-password"></div>
@@ -1284,10 +1345,53 @@ function toggleTheme() {
 
 applyTheme(themeDark());
 
+/* Shared channel filter: independent state for each mounted instance. */
+var CHANNEL_OPTIONS = [
+  { id: '', label: '全部' },
+  { id: 'qoder', label: 'Qoder CN' },
+  { id: 'workbuddy', label: 'WorkBuddy CN' },
+  { id: 'trae', label: 'Trae CN' }
+];
+function createChannelTabs(container, label, onChange) {
+  var value = '';
+  container.setAttribute('role', 'group');
+  container.setAttribute('aria-label', label);
+  container.innerHTML = '';
+  var buttons = CHANNEL_OPTIONS.map(function(option) {
+    var button = document.createElement('button');
+    button.type = 'button'; button.textContent = option.label;
+    button.addEventListener('click', function() { select(option.id); });
+    container.appendChild(button);
+    return button;
+  });
+  function paint() {
+    buttons.forEach(function(button, index) {
+      var active = CHANNEL_OPTIONS[index].id === value;
+      button.className = active ? 'btn sm' : 'btn secondary sm';
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
+  function select(next) {
+    if (next === value || !CHANNEL_OPTIONS.some(function(option) { return option.id === next; })) return;
+    value = next; paint(); onChange(value);
+  }
+  paint();
+  return { select: select, value: function() { return value; } };
+}
+
 /* ---------- Stats ---------- */
 
+var statsProvider = '';
+var statsRequest = 0;
+function selectStatsProvider(provider) {
+  statsProvider = provider;
+  document.getElementById('statsChannelHint').hidden = !provider;
+  loadStats();
+}
 function loadStats() {
-  api('/stats').then(function(d) {
+  var request = ++statsRequest;
+  return api('/stats' + (statsProvider ? '?provider=' + encodeURIComponent(statsProvider) : '')).then(function(d) {
+    if (request !== statsRequest) return;
     var tokens = (d.prompt_tokens || 0) + (d.completion_tokens || 0);
     document.getElementById('statTotal').textContent = fmt(d.total);
     document.getElementById('statReqSub').textContent = '成功率 ' + pct(d.success_rate);
@@ -1300,7 +1404,24 @@ function loadStats() {
     document.getElementById('statAvgOut').textContent = '平均 ' + fmt(avg) + ' / 次';
     renderChart(d.hourly || []);
     renderStatsTable(d.by_model || []);
-  }).catch(function(e) { showToast(e.message, 'error'); });
+    renderFailures(d.failures || []);
+  }).catch(function(e) { if (request === statsRequest) showToast(e.message, 'error'); });
+}
+
+function renderFailures(items) {
+  var list = document.getElementById('failureList'); list.innerHTML = '';
+  document.getElementById('failureCount').textContent = items.length + ' / 200 条';
+  if (!items.length) { var empty = document.createElement('p'); empty.className = 'hint'; empty.textContent = '暂无失败记录。'; list.appendChild(empty); return; }
+  var kinds = { timeout:'请求超时', queue_timeout:'排队超时', authentication:'认证失败', rate_limit:'请求限流', invalid_request:'参数错误', stream_error:'响应中断', client_cancelled:'客户端取消', upstream_error:'上游异常' };
+  items.forEach(function(item) {
+    var row = document.createElement('details'); row.className = 'failure-item';
+    var summary = document.createElement('summary'); summary.className = 'failure-summary';
+    var title = document.createElement('span'); title.className = 'failure-title'; title.textContent = item.model;
+    var badge = document.createElement('span'); badge.className = 'failure-kind'; badge.textContent = (kinds[item.kind] || '请求失败') + ' · ' + item.status;
+    var meta = document.createElement('span'); meta.className = 'failure-meta'; meta.textContent = timeLabel(item.at) + ' · ' + item.duration_ms + ' ms';
+    summary.appendChild(title); summary.appendChild(badge); summary.appendChild(meta); row.appendChild(summary);
+    var reason = document.createElement('pre'); reason.className = 'failure-reason'; reason.textContent = item.reason; row.appendChild(reason); list.appendChild(row);
+  });
 }
 
 function fmtCredits(v) {
@@ -1454,28 +1575,59 @@ function loadQoder() {
   return api('/qoder').then(function(data) {
     document.getElementById('qoderDisplay').value = data.token_masked || '';
     document.getElementById('qoderInput').value = '';
-    var badge = document.getElementById('qoderBadge'); badge.textContent = data.configured ? '已配置' : '未配置'; badge.className = data.configured ? 'badge ok' : 'badge bad';
+    var badge = document.getElementById('qoderBadge'); badge.textContent = data.configured ? '已配置 · 未验证' : '未配置'; badge.className = 'badge';
+    document.getElementById('qoderStatusHint').textContent = '';
   }).catch(function(e) { showToast(e.message, 'error'); });
 }
 function saveQoder() {
   var pat = document.getElementById('qoderInput').value.trim(); if (!pat) { showToast('请输入 PAT', 'error'); return; }
-  api('/qoder', { method: 'POST', body: JSON.stringify({ pat: pat }) }).then(function() { showToast('已保存'); loadQoder(); }).catch(function(e) { showToast(e.message, 'error'); });
+  return saveChannel('qoder', { pat: pat }, loadQoder);
 }
 function clearQoder() {
   if (!confirm('清空 Qoder PAT？')) return;
   api('/qoder', { method: 'DELETE' }).then(function() { showToast('已清空'); loadQoder(); }).catch(function(e) { showToast(e.message, 'error'); });
 }
+function connectionTestMessage(result) {
+  return '连接通过' + (typeof result.model_count === 'number' ? ' · ' + result.model_count + ' 个模型' : '');
+}
+var channelBusy = {};
+function testChannel(provider) {
+  if (channelBusy[provider]) return Promise.resolve();
+  channelBusy[provider] = true;
+  var save = document.getElementById(provider + 'SaveButton'), test = document.getElementById(provider + 'TestButton');
+  var hint = document.getElementById(provider + 'StatusHint');
+  var badge = document.getElementById(provider === 'workbuddy' ? 'wbBadge' : 'qoderBadge');
+  save.disabled = test.disabled = true; test.textContent = '测试中…'; hint.textContent = '';
+  return api('/channel/test', { method: 'POST', body: JSON.stringify({ provider: provider }) }).then(function(data) {
+    badge.textContent = '最近测试通过'; badge.className = 'badge ok';
+    hint.textContent = connectionTestMessage(data);
+    showToast('连接测试通过');
+  }).catch(function(e) {
+    badge.textContent = '最近测试失败'; badge.className = 'badge bad';
+    hint.textContent = '连接测试失败：' + e.message; showToast(e.message, 'error');
+  }).finally(function() { channelBusy[provider] = false; save.disabled = test.disabled = false; test.textContent = '测试连接'; });
+}
+function saveChannel(provider, body, reload) {
+  var button = document.getElementById(provider + 'SaveButton');
+  if (button.disabled) return;
+  button.disabled = true; button.textContent = '保存中…';
+  return api('/' + provider, { method: 'POST', body: JSON.stringify(body) })
+    .then(function() { return reload().then(function() { return testChannel(provider); }); })
+    .catch(function(e) { showToast('保存失败：' + e.message, 'error'); })
+    .finally(function() { button.disabled = false; button.textContent = '保存并测试连接'; });
+}
 function providerLabel(id) { return { 'qoder-cn':'Qoder CN', 'trae-cn':'Trae CN', 'workbuddy-cn':'WorkBuddy CN' }[id] || id; }
 
 function loadWorkBuddy() {
-  api('/workbuddy').then(function(data) {
+  return api('/workbuddy').then(function(data) {
     document.getElementById('wbDisplay').value = data.token_masked || '';
     document.getElementById('wbInput').value = '';
+    document.getElementById('workbuddyStatusHint').textContent = '';
     var b = document.getElementById('wbBadge');
     if (b) {
       if (data.configured) {
-        b.className = 'badge ok';
-        b.textContent = '已配置';
+        b.className = 'badge';
+        b.textContent = '已配置 · 未验证';
       } else {
         b.className = 'badge bad';
         b.textContent = '未配置';
@@ -1487,9 +1639,7 @@ function loadWorkBuddy() {
 function saveWorkBuddy() {
   var token = document.getElementById('wbInput').value.trim();
   if (!token) { showToast('WorkBuddy Token 不能为空', 'error'); return; }
-  api('/workbuddy', { method: 'POST', body: JSON.stringify({ token: token }) })
-    .then(function() { showToast('WorkBuddy 令牌已保存并热生效'); loadWorkBuddy(); })
-    .catch(function(e) { showToast(e.message, 'error'); });
+  return saveChannel('workbuddy', { token: token }, loadWorkBuddy);
 }
 
 function clearWorkBuddy() {
@@ -1500,10 +1650,18 @@ function clearWorkBuddy() {
 }
 
 var traeProfiles = [];
+var traeTesting = false;
 function timeLabel(value) {
   if (!value) return '尚无记录';
   var date = new Date(value);
   return isNaN(date.getTime()) ? '时间未知' : date.toLocaleString('zh-CN', { hour12: false });
+}
+function traeErrorHint(message) {
+  if (/Trae 企业版登录/.test(message)) return message;
+  if (/HTTP 401|code["\s:]+1001|authenticate you/i.test(message)) return 'Trae 认证失败：请使用 Trae 中国区登录会话的访问令牌（Cloud-IDE-JWT），检查是否填错或已失效。';
+  if (/HTTP 403/i.test(message)) return 'Trae 拒绝访问：请检查账号状态和所选模型权限。';
+  if (/timeout|deadline exceeded/i.test(message)) return 'Trae 请求超时，请稍后重试并检查服务器网络。';
+  return message;
 }
 function showTraeStatus(data) {
   var status = data.status || {};
@@ -1520,15 +1678,18 @@ function showTraeStatus(data) {
   badge.textContent = label; badge.className = cls;
   var expiry = status.expires_at || data.expires_at;
   document.getElementById('traeExpiryStatus').textContent = !data.configured ? '未配置' : expiry ? timeLabel(expiry) + (seconds <= 0 ? '（已到期）' : seconds < 86400 ? '（24 小时内到期）' : '') : '上游未声明过期时间';
-  document.getElementById('traeRefreshStatus').textContent = status.persistence_pending ? '会话已续期，等待重试保存' : status.refresh_available ? '已配置刷新凭据，到期前自动续期' : '未配置刷新凭据，需手动更新';
+  document.getElementById('traeRefreshStatus').textContent = status.persistence_pending ? '会话已续期，等待重试保存' : status.refresh_available ? '已配置，到期前自动续期' : '未配置刷新凭据，需手动更新';
   document.getElementById('traeConcurrency').textContent = (status.active_requests || 0) + ' / ' + (status.queued_requests || 0);
-  var hint = status.persistence_pending ? '会话保存失败，请检查配置文件权限。' : '';
+  var hint = status.persistence_pending ? '会话保存失败，请检查配置文件权限。' : status.last_test && status.last_test.at ? (status.last_test.success ? connectionTestMessage(status.last_test) : '连接测试失败：' + traeErrorHint(status.last_test.error || '请重新测试')) : data.configured ? '令牌已保存，尚未验证连接。' : '尚未配置 Trae 令牌。';
   document.getElementById('traeStatusHint').textContent = hint;
   var container = document.getElementById('traeOperations'); container.innerHTML = '';
-  [['最近连接测试', status.last_test], ['最近令牌续期', status.last_refresh], ['最近模型目录请求', status.last_catalog], ['最近聊天请求', status.last_chat]].forEach(function(entry) {
-    var op = entry[1] || {}; var row = document.createElement('div');
-    row.className = 'provider-operation' + (op.at && !op.success ? ' failed' : '');
-    row.textContent = entry[0] + '：' + (!op.at ? '尚无记录' : timeLabel(op.at) + ' · ' + (op.success ? '成功' : '失败') + ' · ' + op.duration_ms + ' ms' + (op.error ? '\n' + op.error : ''));
+  [['连接测试', status.last_test], ['令牌续期', status.last_refresh], ['模型目录', status.last_catalog], ['模型调用', status.last_chat]].forEach(function(entry) {
+    var op = entry[1] || {}, row = document.createElement('div'); row.className = 'operation-row';
+    var label = document.createElement('span'); label.className = 'operation-label'; label.textContent = entry[0];
+    var badge = document.createElement('span'); badge.className = 'operation-badge' + (op.at ? op.success ? ' success' : ' failed' : ''); badge.textContent = !op.at ? '暂无记录' : op.success ? '成功' : '失败';
+    var time = document.createElement('span'); time.className = 'operation-time'; time.textContent = op.at ? timeLabel(op.at) + ' · ' + op.duration_ms + ' ms' : '—';
+    row.appendChild(label); row.appendChild(badge); row.appendChild(time);
+    if (op.error) {var error = document.createElement('pre'); error.className = 'failure-reason'; error.textContent = op.error; row.appendChild(error);}
     container.appendChild(row);
   });
 }
@@ -1541,7 +1702,7 @@ function loadTrae() {
     document.getElementById('traeInput').value = '';
     document.getElementById('traeUserID').value = data.user_id || '';
     document.getElementById('traeRefresh').value = '';
-    document.getElementById('traeExpires').value = data.expires_at || '';
+    document.getElementById('traeExpires').value = '';
     document.getElementById('traeClientID').value = data.client_id || 'ono9krqynydwx5';
     showTraeStatus(data);
     document.getElementById('traeTestModel').innerHTML = '<option value="">先测试连接，再选择模型</option>';
@@ -1552,11 +1713,19 @@ function traeForm() {
   return { token: document.getElementById('traeInput').value.trim(), user_id: document.getElementById('traeUserID').value.trim(), refresh_token: document.getElementById('traeRefresh').value.trim(), expires_at: document.getElementById('traeExpires').value.trim(), client_id: document.getElementById('traeClientID').value };
 }
 function saveTrae() {
+  if (traeTesting) return;
   var form = traeForm();
-  if (!form.token) { showToast('请输入新令牌；保存当前会话可使用另存为新账号', 'error'); return; }
-  api('/trae', { method: 'POST', body: JSON.stringify(form) })
-    .then(function() { showToast('Trae 凭据已保存并热生效'); loadTrae(); })
-    .catch(function(e) { showToast(e.message, 'error'); });
+  if (!form.token) { showToast('请粘贴 Trae 访问令牌', 'error'); return; }
+  var button = document.getElementById('traeSaveButton');
+  button.disabled = true; button.textContent = '保存中…';
+  return api('/trae', { method: 'POST', body: JSON.stringify(form) })
+    .then(function() {
+      document.getElementById('traeInput').value = '';
+      document.getElementById('traeRefresh').value = '';
+      return loadTrae().then(function() { return testTrae(false); });
+    })
+    .catch(function(e) { showToast('保存失败：' + e.message, 'error'); })
+    .finally(function() { button.disabled = false; button.textContent = '保存并测试连接'; });
 }
 function clearTrae() {
   if (!confirm('确定清空当前 Trae 账号的令牌？已保存的其他账号不受影响。')) return;
@@ -1565,18 +1734,22 @@ function clearTrae() {
     .catch(function(e) { showToast(e.message, 'error'); });
 }
 function testTrae(chat) {
+  if (traeTesting) return Promise.resolve();
   var model = chat ? document.getElementById('traeTestModel').value : '';
   if (chat && !model) { showToast('请先测试连接，再选择测试模型', 'error'); return; }
   var connectionButton = document.getElementById('traeConnectionButton'), chatButton = document.getElementById('traeChatButton');
+  traeTesting = true;
   connectionButton.disabled = true; chatButton.disabled = true;
+  document.getElementById('traeSaveButton').disabled = true;
   var button = chat ? chatButton : connectionButton; var old = button.textContent; button.textContent = '测试中…';
-  api('/trae/test', { method: 'POST', body: JSON.stringify({ model: model }) }).then(function(result) {
+  return api('/trae/test', { method: 'POST', body: JSON.stringify({ model: model }) }).then(function(result) {
     var select = document.getElementById('traeTestModel'); select.innerHTML = '<option value="">选择测试对话的模型</option>';
     (result.models || []).forEach(function(m) { var option = document.createElement('option'); option.value = m.id; option.textContent = m.name + ' · ' + m.id; select.appendChild(option); });
     if (model) select.value = model;
-    showToast((result.chat_tested ? '对话测试通过' : '连接通过，返回 ' + result.model_count + ' 个模型') + ' · ' + result.duration_ms + ' ms');
-  }).catch(function(e) { showToast(e.message, 'error'); }).finally(function() {
-    button.textContent = old; connectionButton.disabled = false; chatButton.disabled = false; loadTraeStatus(true);
+    showToast(result.chat_tested ? '对话测试通过' : '连接测试通过');
+  }).catch(function(e) { showToast(traeErrorHint(e.message), 'error'); }).finally(function() {
+    traeTesting = false;
+    button.textContent = old; connectionButton.disabled = false; chatButton.disabled = false; document.getElementById('traeSaveButton').disabled = false; return loadTraeStatus(true);
   });
 }
 function loadTraeAccounts() {
@@ -1615,15 +1788,12 @@ setInterval(function() { if (loggedIn && currentPage === 'token') loadTraeStatus
 
 /* ---------- Models ---------- */
 
+var modelProvider = '';
 var cachedModels = [];
 function loadModels() {
   document.getElementById('modelCount').textContent = '加载中…';
   api('/models').then(function(data) {
     cachedModels = data.models || [];
-    var errors = document.getElementById('modelProviderErrors'); errors.innerHTML = '';
-    Object.keys(data.provider_errors || {}).forEach(function(provider) {
-      var p = document.createElement('p'); p.className = 'hint-warn'; p.textContent = providerLabel(provider) + ' 目录获取失败：' + data.provider_errors[provider]; errors.appendChild(p);
-    });
     renderModels();
   }).catch(function(e) { document.getElementById('modelCount').textContent = '加载失败'; showToast(e.message, 'error'); });
 }
@@ -1635,7 +1805,7 @@ function formatTokens(n) {
 }
 
 function renderModels() {
-  var provider = document.getElementById('modelProviderFilter').value;
+  var provider = modelProvider ? modelProvider + '-cn' : '';
   var search = document.getElementById('modelSearch').value.trim().toLowerCase();
   var list = cachedModels.filter(function(item) {
     return (!provider || item.provider === provider) &&
@@ -1734,6 +1904,10 @@ function savePassword() {
 
 /* ---------- Init ---------- */
 
+var statsChannelTabs = createChannelTabs(document.getElementById('statsChannelTabs'), '统计渠道', selectStatsProvider);
+var modelChannelTabs = createChannelTabs(document.getElementById('modelChannelTabs'), '模型渠道', function(provider) {
+  modelProvider = provider; renderModels();
+});
 checkAuth();
 </script>
 </body>

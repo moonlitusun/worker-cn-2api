@@ -50,6 +50,9 @@ func (b *Bridge) ensureCredentials(ctx context.Context) (result Config, retErr e
 	}
 	c := b.cfg
 	b.mu.Unlock()
+	if strings.HasPrefix(c.Token, "trae-lt-") {
+		return b.enterpriseCredentials(ctx, c)
+	}
 	expiry := tokenExpiry(c)
 	if c.RefreshToken == "" || expiry.IsZero() || time.Until(expiry) > time.Minute {
 		return c, nil

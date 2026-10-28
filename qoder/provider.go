@@ -89,6 +89,12 @@ func (p *Provider) Models(ctx context.Context) ([]string, error) {
 	}
 	return catalog.Keys(), nil
 }
+
+// TestModels verifies the saved PAT with a new session and uncached catalog.
+func (p *Provider) TestModels(ctx context.Context) ([]string, error) {
+	_, pat := p.snapshot()
+	return NewProvider(pat).Models(ctx)
+}
 func (p *Provider) HandleChat(ctx context.Context, w http.ResponseWriter, body map[string]any, recorders ...*stats.Recorder) error {
 	timeouts()
 	b, pat := p.snapshot()
@@ -112,7 +118,7 @@ func (p *Provider) HandleChat(ctx context.Context, w http.ResponseWriter, body m
 	var sink bridge.UsageSink
 	if len(recorders) > 0 && recorders[0] != nil {
 		sink = func(u *transform.Usage) {
-			recorders[0].RecordUsage(&stats.Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, CachedTokens: u.CachedPromptTokens(), Credits: u.Credits})
+			recorders[0].RecordUsageFor("qoder", &stats.Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, CachedTokens: u.CachedPromptTokens(), Credits: u.Credits})
 		}
 	}
 	return classify(b.HandleChat(ctx, w, copy, sink), pat)
